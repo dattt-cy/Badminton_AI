@@ -66,3 +66,39 @@ def test_export_rejects_a_class_without_valid_samples(tmp_path: Path) -> None:
             tmp_path / "annotations.pkl",
             {"backhand_drive": 0, "other": 1},
         )
+
+
+def test_single_player_source_group_does_not_span_splits(tmp_path: Path) -> None:
+    pose_root = tmp_path / "poses"
+    for index in range(6):
+        save_pose(
+            pose_root
+            / "backhand_drive"
+            / "single_player"
+            / f"source_a_{index:02}.npz"
+        )
+    for index in range(4):
+        save_pose(
+            pose_root
+            / "backhand_drive"
+            / "single_player"
+            / f"source_b_{index:02}.npz"
+        )
+
+    dataset = build_pyskl_dataset(
+        pose_root,
+        tmp_path / "annotations.pkl",
+        {"backhand_drive": 0},
+    )
+    split_by_identifier = {
+        identifier: split_name
+        for split_name, identifiers in dataset["split"].items()
+        for identifier in identifiers
+    }
+    source_splits: dict[str, set[str]] = {}
+    for annotation in dataset["annotations"]:
+        source_splits.setdefault(annotation["source_group"], set()).add(
+            split_by_identifier[annotation["frame_dir"]]
+        )
+
+    assert all(len(splits) == 1 for splits in source_splits.values())

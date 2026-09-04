@@ -28,6 +28,7 @@ def build_pyskl_dataset(
     annotations: list[dict] = []
     del seed  # Kept in the API for backward-compatible configuration files.
     identifiers_by_stratum: dict[tuple[str, str], list[str]] = {}
+    source_by_identifier: dict[str, str] = {}
 
     for action, label in sorted(classes.items(), key=lambda item: item[1]):
         action_files = sorted(
@@ -60,6 +61,12 @@ def build_pyskl_dataset(
             )
             height = int(data["frame_height"])
             width = int(data["frame_width"])
+            source_group = (
+                "match_01"
+                if recording_type == "match"
+                else _single_player_source_group(identifier)
+            )
+            source_by_identifier[identifier] = source_group
             annotations.append({
                 "frame_dir": identifier,
                 "total_frames": int(keypoints.shape[0]),
@@ -67,11 +74,7 @@ def build_pyskl_dataset(
                 "original_shape": (height, width),
                 "label": int(label),
                 "recording_type": recording_type,
-                "source_group": (
-                    "match_01"
-                    if recording_type == "match"
-                    else _single_player_source_group(identifier)
-                ),
+                "source_group": source_group,
                 "keypoint": keypoints[None, ..., :2],
                 "keypoint_score": keypoints[None, ..., 2],
             })
@@ -88,13 +91,32 @@ def build_pyskl_dataset(
     split = {"train": [], "val": [], "test": []}
     # Keep adjacent clips together in ordered blocks. Match clips still share
     # one source, so this is only an exploratory baseline split.
-    for identifiers in identifiers_by_stratum.values():
+    for (_, recording_type), identifiers in identifiers_by_stratum.items():
         count = len(identifiers)
         train_end = round(count * train_ratio)
         val_end = train_end + round(count * val_ratio)
-        split["train"].extend(identifiers[:train_end])
-        split["val"].extend(identifiers[train_end:val_end])
-        split["test"].extend(identifiers[val_end:])
+        if recording_type == "single_player":
+            groups: list[list[str]] = []
+            for identifier in identifiers:
+                source_group = source_by_identifier[identifier]
+                if not groups or source_by_identifier[groups[-1][0]] != source_group:
+                    groups.append([])
+                groups[-1].append(identifier)
+            assigned = 0
+            for group in groups:
+                split_name = (
+                    "train" if assigned < train_end
+                    else "val" if assigned < val_end
+                    else "test"
+                )
+                split[split_name].extend(group)
+                assigned += len(group)
+        else:
+            # All current match clips share one original match, so retain the
+            # contiguous exploratory baseline until more match sources exist.
+            split["train"].extend(identifiers[:train_end])
+            split["val"].extend(identifiers[train_end:val_end])
+            split["test"].extend(identifiers[val_end:])
 
     dataset = {"split": split, "annotations": annotations}
     output_path = Path(output_path)
