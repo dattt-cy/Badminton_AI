@@ -6,6 +6,7 @@ import pytest
 
 from ai_classifier.action_recognition.pyskl_export import (
     _single_player_source_group,
+    _source_group_splits,
     build_pyskl_dataset,
 )
 
@@ -102,3 +103,9 @@ def test_single_player_source_group_does_not_span_splits(tmp_path: Path) -> None
         )
 
     assert all(len(splits) == 1 for splits in source_splits.values())
+
+
+def test_five_sources_keep_train_validation_and_test_sources() -> None:
+    assert _source_group_splits(
+        5, train_ratio=0.70, val_ratio=0.15
+    ) == ["train", "train", "train", "val", "test"]

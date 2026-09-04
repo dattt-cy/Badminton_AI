@@ -102,15 +102,11 @@ def build_pyskl_dataset(
                 if not groups or source_by_identifier[groups[-1][0]] != source_group:
                     groups.append([])
                 groups[-1].append(identifier)
-            assigned = 0
-            for group in groups:
-                split_name = (
-                    "train" if assigned < train_end
-                    else "val" if assigned < val_end
-                    else "test"
-                )
+            group_splits = _source_group_splits(
+                len(groups), train_ratio=train_ratio, val_ratio=val_ratio
+            )
+            for group, split_name in zip(groups, group_splits, strict=True):
                 split[split_name].extend(group)
-                assigned += len(group)
         else:
             # All current match clips share one original match, so retain the
             # contiguous exploratory baseline until more match sources exist.
@@ -124,6 +120,31 @@ def build_pyskl_dataset(
     with output_path.open("wb") as output_file:
         pickle.dump(dataset, output_file, protocol=pickle.HIGHEST_PROTOCOL)
     return dataset
+
+
+def _source_group_splits(
+    group_count: int, *, train_ratio: float, val_ratio: float
+) -> list[str]:
+    """Assign whole sources while retaining evaluation splits when possible."""
+    if group_count <= 0:
+        return []
+    if group_count == 1:
+        return ["train"]
+    if group_count == 2:
+        return ["train", "test"]
+
+    test_ratio = 1.0 - train_ratio - val_ratio
+    val_count = max(1, round(group_count * val_ratio))
+    test_count = max(1, round(group_count * test_ratio))
+    if val_count + test_count >= group_count:
+        val_count = 1
+        test_count = 1
+    train_count = group_count - val_count - test_count
+    return (
+        ["train"] * train_count
+        + ["val"] * val_count
+        + ["test"] * test_count
+    )
 
 
 def _single_player_source_group(identifier: str) -> str:
