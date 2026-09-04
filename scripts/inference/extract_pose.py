@@ -21,6 +21,12 @@ def parse_args() -> argparse.Namespace:
         default=Path('configs/pose/yolov8.yaml'),
         help='YOLOv8 Pose YAML configuration',
     )
+    parser.add_argument(
+        '--target',
+        choices=('any', 'single', 'far', 'near'),
+        default=None,
+        help='Target player region; overrides the YAML configuration',
+    )
     return parser.parse_args()
 
 
@@ -35,6 +41,9 @@ def main() -> None:
         image_size=int(config.get('image_size', 640)),
         device=config.get('device'),
         tracking_distance_weight=float(config.get('tracking_distance_weight', 1.0)),
+        max_tracking_distance=float(config.get('max_tracking_distance', 0.15)),
+        max_tracking_gap=int(config.get('max_tracking_gap', 5)),
+        target_region=args.target or config.get('target_region', 'any'),
     )
     sequence = estimator.extract(args.video)
     smoothing = config.get('smoothing', {})

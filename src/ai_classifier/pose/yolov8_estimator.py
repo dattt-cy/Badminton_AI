@@ -22,6 +22,9 @@ class YOLOv8PoseEstimator:
         image_size: int = 640,
         device: str | None = None,
         tracking_distance_weight: float = 1.0,
+        max_tracking_distance: float = 0.15,
+        max_tracking_gap: int = 5,
+        target_region: str = 'any',
         model: Any | None = None,
     ) -> None:
         if not 0.0 <= confidence <= 1.0:
@@ -30,6 +33,12 @@ class YOLOv8PoseEstimator:
             raise ValueError('image_size must be positive')
         if tracking_distance_weight < 0:
             raise ValueError('tracking_distance_weight cannot be negative')
+        if max_tracking_distance <= 0:
+            raise ValueError('max_tracking_distance must be positive')
+        if max_tracking_gap < 0:
+            raise ValueError('max_tracking_gap cannot be negative')
+        if target_region not in {'any', 'single', 'far', 'near'}:
+            raise ValueError('target_region must be any, single, far, or near')
 
         if model is None:
             try:
@@ -45,6 +54,9 @@ class YOLOv8PoseEstimator:
         self.image_size = image_size
         self.device = device
         self.tracking_distance_weight = tracking_distance_weight
+        self.max_tracking_distance = max_tracking_distance
+        self.max_tracking_gap = max_tracking_gap
+        self.target_region = target_region
 
     def extract(self, video_path: str | Path) -> PoseSequence:
         source = Path(video_path)
@@ -65,19 +77,38 @@ class YOLOv8PoseEstimator:
         frames: list[np.ndarray] = []
         joint_count = 17
         previous_pose: np.ndarray | None = None
+        missed_frames = 0
         frame_diagonal = float(np.hypot(width, height))
         for result in self.model.predict(**options):
             data = self._keypoint_data(result)
             if data is None or data.shape[0] == 0:
                 frames.append(np.zeros((joint_count, 3), dtype=np.float32))
+                missed_frames += 1
+                if missed_frames > self.max_tracking_gap:
+                    previous_pose = None
                 continue
 
             joint_count = data.shape[1]
+            data = self._filter_target_region(data, width, height)
+            if data.shape[0] == 0:
+                frames.append(np.zeros((joint_count, 3), dtype=np.float32))
+                missed_frames += 1
+                if missed_frames > self.max_tracking_gap:
+                    previous_pose = None
+                continue
             selected = self._select_tracked_pose(
                 data, previous_pose, frame_diagonal
-            ).astype(np.float32, copy=False)
+            )
+            if selected is None:
+                frames.append(np.zeros((joint_count, 3), dtype=np.float32))
+                missed_frames += 1
+                if missed_frames > self.max_tracking_gap:
+                    previous_pose = None
+                continue
+            selected = selected.astype(np.float32, copy=False)
             frames.append(selected)
             previous_pose = selected
+            missed_frames = 0
 
         keypoints = (
             np.stack(frames).astype(np.float32, copy=False)
@@ -86,12 +117,31 @@ class YOLOv8PoseEstimator:
         )
         return PoseSequence(keypoints, fps, width, height)
 
+    def _filter_target_region(
+        self, candidates: np.ndarray, frame_width: int, frame_height: int
+    ) -> np.ndarray:
+        if self.target_region in {'any', 'single'}:
+            return candidates
+        centers = np.stack([self._pose_center(candidate) for candidate in candidates])
+        centers_x = centers[:, 0]
+        centers_y = centers[:, 1]
+        if self.target_region == 'far':
+            # Exclude spectators, coaches, and line judges outside the court.
+            in_far_court = (
+                (centers_y >= frame_height * 0.16)
+                & (centers_y < frame_height * 0.58)
+                & (centers_x >= frame_width * 0.18)
+                & (centers_x <= frame_width * 0.82)
+            )
+            return candidates[in_far_court]
+        return candidates[centers_y >= frame_height * 0.42]
+
     def _select_tracked_pose(
         self,
         candidates: np.ndarray,
         previous_pose: np.ndarray | None,
         frame_diagonal: float,
-    ) -> np.ndarray:
+    ) -> np.ndarray | None:
         confidence_scores = candidates[:, :, 2].mean(axis=1)
         if previous_pose is None or frame_diagonal <= 0:
             return candidates[int(np.argmax(confidence_scores))]
@@ -101,9 +151,13 @@ class YOLOv8PoseEstimator:
             [self._pose_center(candidate) for candidate in candidates]
         )
         distances = np.linalg.norm(candidate_centers - previous_center, axis=1)
+        nearby = distances <= self.max_tracking_distance * frame_diagonal
+        if not nearby.any():
+            return None
         tracking_scores = confidence_scores - (
             self.tracking_distance_weight * distances / frame_diagonal
         )
+        tracking_scores[~nearby] = -np.inf
         return candidates[int(np.argmax(tracking_scores))]
 
     @staticmethod

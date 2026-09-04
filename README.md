@@ -55,3 +55,39 @@ Tao video preview co skeleton:
 ```bash
 python scripts/inference/render_pose.py data/raw/sample.mp4 outputs/sample_pose.npz outputs/sample_pose_preview.mp4
 ```
+
+## Chuan bi dataset ST-GCN
+
+Trich xuat skeleton cho toan bo dataset. Video `match` tu dong chon nguoi o
+san xa; video `single_player` chon nguoi duy nhat:
+
+```bash
+python scripts/data/extract_dataset_poses.py
+```
+
+Lenh co the chay lai de tiep tuc vi cac file da xu ly se duoc bo qua. Sau khi
+extract xong, xuat annotation dung format PySKL:
+
+```bash
+python scripts/data/export_pyskl.py
+```
+
+Xoay va scale du lieu duoc cau hinh de augmentation skeleton trong luc train,
+khong nhan ban video vat ly. Cau hinh dataset nam tai
+`configs/action_recognition/dataset.yaml`.
+
+Config train ST-GCN++ nam tai
+`configs/action_recognition/stgcnpp_badminton.py`. Pipeline train tu dong tao
+rotation khoang +/-6.9 do va scale +/-10% moi epoch; validation va test khong
+augmentation.
+
+Vi cac clip `match` hien tai deu duoc cat tu cung mot tran, split duoc tao theo
+cac block lien tiep va chi phu hop lam baseline thu nghiem. File
+`data/annotations/badminton_actions.csv` ghi `source_group` de theo doi nguy
+co ro ri du lieu. Can them tran hoac nguoi choi moi truoc khi danh gia chinh
+thuc.
+
+Train tren GPU Google Colab bang notebook
+`notebooks/train_stgcnpp_colab.ipynb`. Notebook tao moi truong PySKL Python
+3.10 rieng tren Colab; chi can upload `badminton_actions.pkl`, khong can upload
+video tho.

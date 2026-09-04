@@ -13,7 +13,10 @@ venv/
 .vscode/
 
 # Datasets and generated artifacts
-data/raw/*
+data/raw/**
+!data/raw/**/
+!data/raw/**/.gitkeep
+!data/raw/README.md
 data/interim/*
 data/processed/*
 models/checkpoints/*

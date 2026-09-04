@@ -3,6 +3,9 @@ confidence: 0.25
 image_size: 640
 device: null
 tracking_distance_weight: 1.0
+max_tracking_distance: 0.15
+max_tracking_gap: 5
+target_region: any
 smoothing:
   enabled: true
   alpha: 0.35

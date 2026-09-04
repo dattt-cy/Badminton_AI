@@ -100,6 +100,46 @@ def test_tracking_prefers_nearby_person_over_higher_confidence(
     assert np.all(sequence.keypoints[1, :, 0] == 110.0)
 
 
+def test_far_region_selects_person_in_top_half() -> None:
+    candidates = np.zeros((2, 17, 3), dtype=np.float32)
+    candidates[0, :, :2] = (500.0, 800.0)
+    candidates[0, :, 2] = 0.95
+    candidates[1, :, :2] = (500.0, 250.0)
+    candidates[1, :, 2] = 0.75
+    estimator = YOLOv8PoseEstimator(model=FakeModel([]), target_region='far')
+
+    selected = estimator._filter_target_region(candidates, 1920, 1080)
+
+    assert selected.shape[0] == 1
+    assert np.all(selected[0, :, 1] == 250.0)
+
+
+def test_far_region_excludes_person_outside_court_sideline() -> None:
+    candidates = np.zeros((2, 17, 3), dtype=np.float32)
+    candidates[0, :, :2] = (960.0, 300.0)
+    candidates[1, :, :2] = (1700.0, 300.0)
+    candidates[:, :, 2] = 0.9
+    estimator = YOLOv8PoseEstimator(model=FakeModel([]), target_region='far')
+
+    selected = estimator._filter_target_region(candidates, 1920, 1080)
+
+    assert selected.shape[0] == 1
+    assert np.all(selected[0, :, 0] == 960.0)
+
+
+def test_tracking_rejects_implausible_frame_jump() -> None:
+    previous = np.zeros((17, 3), dtype=np.float32)
+    previous[:, :2] = (100.0, 100.0)
+    previous[:, 2] = 0.9
+    candidate = previous[None].copy()
+    candidate[:, :, :2] = (900.0, 900.0)
+    estimator = YOLOv8PoseEstimator(model=FakeModel([]), max_tracking_distance=0.1)
+
+    selected = estimator._select_tracked_pose(candidate, previous, 1000.0)
+
+    assert selected is None
+
+
 def test_pose_sequence_saves_keypoints_and_metadata(tmp_path: Path) -> None:
     sequence = PoseSequence(np.zeros((2, 17, 3), np.float32), 60.0, 1280, 720)
     output = sequence.save(tmp_path / 'nested' / 'pose.npz')

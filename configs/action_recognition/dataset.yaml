@@ -1,0 +1,40 @@
+dataset_root: data/raw
+pose_output_root: data/processed/poses
+annotation_output: data/annotations/badminton_actions.pkl
+model: yolov8n-pose.pt
+device: null
+max_tracking_distance: 0.15
+max_tracking_gap: 5
+
+classes:
+  backhand_drive: 0
+  forehand_lift: 1
+
+recording_types:
+  match:
+    target: far
+    image_size: 960
+  single_player:
+    target: single
+    image_size: 640
+
+smoothing:
+  alpha: 0.35
+  min_confidence: 0.3
+  max_gap: 4
+
+quality:
+  min_detected_ratio: 0.80
+  min_mean_confidence: 0.60
+
+split:
+  strategy: blocked_baseline
+  train: 0.70
+  val: 0.15
+  test: 0.15
+  seed: 42
+
+augmentation:
+  # Applied to skeletons during training, not copied into new video files.
+  random_rotation_radians: 0.12
+  random_scale: 0.10
