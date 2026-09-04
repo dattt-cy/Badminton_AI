@@ -19,9 +19,9 @@ ann_file = 'data/annotations/badminton_actions.pkl'
 
 # 0.12 rad is about 6.9 degrees. Augmentation is generated afresh each epoch.
 train_pipeline = [
-    dict(type='PreNormalize2D'),
     dict(type='BadmintonRandomRot2D', theta=0.12),
     dict(type='RandomScale', scale=0.10),
+    dict(type='PreNormalize2D'),
     dict(type='GenSkeFeat', dataset='coco', feats=['j']),
     dict(type='UniformSample', clip_len=64),
     dict(type='PoseDecode'),

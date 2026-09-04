@@ -25,13 +25,17 @@ class BadmintonRandomRot2D:
 
     def __call__(self, results: dict) -> dict:
         skeleton = results["keypoint"]
-        if skeleton.shape[-1] != 2:
-            raise ValueError("BadmintonRandomRot2D requires 2D keypoints")
+        if skeleton.shape[-1] < 2:
+            raise ValueError("BadmintonRandomRot2D requires x/y keypoints")
         angle = np.random.uniform(-self.theta, self.theta)
         cosine, sine = np.cos(angle), np.sin(angle)
         rotation = np.asarray(
             [[cosine, -sine], [sine, cosine]], dtype=skeleton.dtype
         )
-        results["keypoint"] = np.einsum("ab,mtvb->mtva", rotation, skeleton)
+        rotated_xy = np.einsum("ab,mtvb->mtva", rotation, skeleton[..., :2])
+        results["keypoint"] = (
+            rotated_xy
+            if skeleton.shape[-1] == 2
+            else np.concatenate([rotated_xy, skeleton[..., 2:]], axis=-1)
+        )
         return results
-
