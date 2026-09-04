@@ -91,3 +91,32 @@ Train tren GPU Google Colab bang notebook
 `notebooks/train_stgcnpp_colab.ipynb`. Notebook tao moi truong PySKL Python
 3.10 rieng tren Colab; chi can upload `badminton_actions.pkl`, khong can upload
 video tho.
+
+## Nhan dien dong tac
+
+Dat checkpoint tot nhat tai:
+
+```text
+models/checkpoints/action_recognition/best_top1_acc_epoch_6.pth
+```
+
+Nhan dien truc tiep tu video tran dau (nguoi o san xa):
+
+```bash
+python scripts/inference/classify_action.py path/to/video.mp4 \
+  --target far \
+  --pose-output outputs/video_pose.npz \
+  --json-output outputs/video_prediction.json
+```
+
+Voi video chi co mot nguoi, dung `--target single`. Neu da co pose NPZ thi co
+the bo qua YOLOv8 va chay nhanh hon:
+
+```bash
+python scripts/inference/classify_action.py outputs/video_pose.npz
+```
+
+Ket qua gom nhan `backhand_drive` hoac `forehand_lift`, confidence, xac suat
+tung lop va thong so chat luong pose. ST-GCN++ phai chay trong moi truong
+Python 3.10 co PySKL/MMCV tuong thich nhu notebook Colab; neu chay tu video,
+moi truong do cung can cai Ultralytics.
