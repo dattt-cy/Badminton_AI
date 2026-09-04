@@ -1,0 +1,2 @@
+"""Badminton swing analysis package."""
+

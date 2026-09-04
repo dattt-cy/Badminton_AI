@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments and IDE
+.venv/
+venv/
+.env
+.idea/
+.vscode/
+
+# Datasets and generated artifacts
+data/raw/*
+data/interim/*
+data/processed/*
+models/checkpoints/*
+models/exports/*
+outputs/*
+
+# Keep directory structure
+!**/.gitkeep
+
+# Common ML artifacts
+*.pt
+*.pth
+*.onnx
+*.engine
+*.pkl
+*.pickle
+*.mp4
+*.avi
+*.mov
+
+# Experiment tracking
+wandb/
+runs/
+mlruns/
+
