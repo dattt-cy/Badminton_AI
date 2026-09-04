@@ -99,6 +99,9 @@ backhand_drive/match/097,0,match,match_01,test
 backhand_drive/match/098,0,match,match_01,test
 backhand_drive/match/099,0,match,match_01,test
 backhand_drive/match/100,0,match,match_01,test
+backhand_drive/single_player/001_videoplayback_01,0,single_player,backhand_drive/single_player/001_videoplayback,train
+backhand_drive/single_player/001_videoplayback_02,0,single_player,backhand_drive/single_player/001_videoplayback,train
+backhand_drive/single_player/001_videoplayback_03,0,single_player,backhand_drive/single_player/001_videoplayback,train
 backhand_drive/single_player/backhand_drive (1),0,single_player,backhand_drive/single_player/backhand_drive (1),train
 backhand_drive/single_player/backhand_drive (2),0,single_player,backhand_drive/single_player/backhand_drive (2),train
 backhand_drive/single_player/backhand_drive (3),0,single_player,backhand_drive/single_player/backhand_drive (3),train
@@ -106,9 +109,9 @@ backhand_drive/single_player/backhand_drive (4),0,single_player,backhand_drive/s
 backhand_drive/single_player/backhand_drive (5),0,single_player,backhand_drive/single_player/backhand_drive (5),train
 backhand_drive/single_player/backhand_drive (6),0,single_player,backhand_drive/single_player/backhand_drive (6),train
 backhand_drive/single_player/backhand_drive (7),0,single_player,backhand_drive/single_player/backhand_drive (7),train
-backhand_drive/single_player/backhand_drive (8),0,single_player,backhand_drive/single_player/backhand_drive (8),train
+backhand_drive/single_player/backhand_drive (8),0,single_player,backhand_drive/single_player/backhand_drive (8),val
 backhand_drive/single_player/backhand_drive (9),0,single_player,backhand_drive/single_player/backhand_drive (9),val
-backhand_drive/single_player/backhand_drive (10),0,single_player,backhand_drive/single_player/backhand_drive (10),val
+backhand_drive/single_player/backhand_drive (10),0,single_player,backhand_drive/single_player/backhand_drive (10),test
 backhand_drive/single_player/backhand_drive (11),0,single_player,backhand_drive/single_player/backhand_drive (11),test
 forehand_lift/match/001,1,match,match_01,train
 forehand_lift/match/002,1,match,match_01,train

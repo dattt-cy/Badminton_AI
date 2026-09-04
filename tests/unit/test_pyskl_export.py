@@ -3,7 +3,10 @@ from pathlib import Path
 
 import numpy as np
 
-from ai_classifier.action_recognition.pyskl_export import build_pyskl_dataset
+from ai_classifier.action_recognition.pyskl_export import (
+    _single_player_source_group,
+    build_pyskl_dataset,
+)
 
 
 def save_pose(path: Path, frame_count: int = 8) -> None:
@@ -41,3 +44,12 @@ def test_build_pyskl_dataset_shapes_and_splits(tmp_path: Path) -> None:
     assert annotation["keypoint_score"].shape == (1, 8, 17)
     with output.open("rb") as input_file:
         assert len(pickle.load(input_file)["annotations"]) == 20
+
+
+def test_numbered_clips_share_single_player_source_group() -> None:
+    assert _single_player_source_group(
+        "backhand_drive/single_player/001_videoplayback_03"
+    ) == "backhand_drive/single_player/001_videoplayback"
+    assert _single_player_source_group(
+        "backhand_drive/single_player/011"
+    ) == "backhand_drive/single_player/011"

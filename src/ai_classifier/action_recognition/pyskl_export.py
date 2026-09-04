@@ -68,7 +68,9 @@ def build_pyskl_dataset(
                 "label": int(label),
                 "recording_type": recording_type,
                 "source_group": (
-                    "match_01" if recording_type == "match" else identifier
+                    "match_01"
+                    if recording_type == "match"
+                    else _single_player_source_group(identifier)
                 ),
                 "keypoint": keypoints[None, ..., :2],
                 "keypoint_score": keypoints[None, ..., 2],
@@ -91,6 +93,15 @@ def build_pyskl_dataset(
     with output_path.open("wb") as output_file:
         pickle.dump(dataset, output_file, protocol=pickle.HIGHEST_PROTOCOL)
     return dataset
+
+
+def _single_player_source_group(identifier: str) -> str:
+    """Group numbered clips cut from the same named single-player source."""
+    path = Path(identifier)
+    match = re.match(r"(.+)_\d+$", path.name)
+    if match and not match.group(1).isdigit():
+        return path.with_name(match.group(1)).as_posix()
+    return identifier
 
 
 def _natural_path_key(path: Path) -> list[int | str]:
