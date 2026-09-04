@@ -39,3 +39,5 @@ wandb/
 runs/
 mlruns/
 
+# Python package build metadata
+*.egg-info/

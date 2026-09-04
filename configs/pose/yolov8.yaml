@@ -1,0 +1,10 @@
+model: yolov8n-pose.pt
+confidence: 0.25
+image_size: 640
+device: null
+tracking_distance_weight: 1.0
+smoothing:
+  enabled: true
+  alpha: 0.35
+  min_confidence: 0.3
+  max_gap: 4
