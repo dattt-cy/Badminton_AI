@@ -51,3 +51,23 @@ def test_prediction_rejects_low_quality_pose() -> None:
 
     with pytest.raises(ValueError, match="mean confidence"):
         classifier.predict(make_sequence(confidence=0.1))
+
+
+def test_three_class_model_selects_other_label() -> None:
+    class Head:
+        num_classes = 3
+
+    class Model:
+        cls_head = Head()
+
+    classifier = STGCNPPClassifier(
+        "unused.py",
+        "unused.pth",
+        model=Model(),
+        inference_fn=lambda model, data: [(2, 0.8), (0, 0.15), (1, 0.05)],
+    )
+
+    prediction = classifier.predict(make_sequence())
+
+    assert prediction.label == "other"
+    assert prediction.confidence == pytest.approx(0.8)

@@ -7,7 +7,10 @@ data/raw/
 |-- backhand_drive/
 |   |-- single_player/
 |   `-- match/
-`-- forehand_lift/
+|-- forehand_lift/
+|   |-- single_player/
+|   `-- match/
+`-- other/
     |-- single_player/
     `-- match/
 ```
@@ -19,7 +22,12 @@ player01_backhand_drive_001.mp4
 player01_forehand_lift_001.mp4
 match01_forehand_lift_far_001.mp4
 match01_backhand_drive_near_001.mp4
+player01_other_ready_position_001.mp4
 ```
+
+`other` contains clips that are neither target action: ready position,
+walking, waiting, shadow movement, serves, clears, smashes, and unrelated
+strokes. Do not put mislabeled or ambiguous target actions in this class.
 
 For match clips, include `near`, `far`, `left`, or `right` in the filename to
 identify the target player. Raw videos are ignored by Git.

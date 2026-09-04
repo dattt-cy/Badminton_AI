@@ -76,6 +76,15 @@ def build_pyskl_dataset(
                 "keypoint_score": keypoints[None, ..., 2],
             })
 
+    present_labels = {annotation["label"] for annotation in annotations}
+    missing_classes = [
+        action for action, label in classes.items() if label not in present_labels
+    ]
+    if missing_classes:
+        raise ValueError(
+            "No valid pose samples for classes: " + ", ".join(missing_classes)
+        )
+
     split = {"train": [], "val": [], "test": []}
     # Keep adjacent clips together in ordered blocks. Match clips still share
     # one source, so this is only an exploratory baseline split.

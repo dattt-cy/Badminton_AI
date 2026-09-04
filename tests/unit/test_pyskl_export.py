@@ -2,6 +2,7 @@ import pickle
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from ai_classifier.action_recognition.pyskl_export import (
     _single_player_source_group,
@@ -53,3 +54,15 @@ def test_numbered_clips_share_single_player_source_group() -> None:
     assert _single_player_source_group(
         "backhand_drive/single_player/011"
     ) == "backhand_drive/single_player/011"
+
+
+def test_export_rejects_a_class_without_valid_samples(tmp_path: Path) -> None:
+    pose_root = tmp_path / "poses"
+    save_pose(pose_root / "backhand_drive" / "match" / "001.npz")
+
+    with pytest.raises(ValueError, match="other"):
+        build_pyskl_dataset(
+            pose_root,
+            tmp_path / "annotations.pkl",
+            {"backhand_drive": 0, "other": 1},
+        )

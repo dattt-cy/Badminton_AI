@@ -76,8 +76,9 @@ Xoay va scale du lieu duoc cau hinh de augmentation skeleton trong luc train,
 khong nhan ban video vat ly. Cau hinh dataset nam tai
 `configs/action_recognition/dataset.yaml`.
 
-Config train ST-GCN++ nam tai
-`configs/action_recognition/stgcnpp_badminton.py`. Pipeline train tu dong tao
+Config train ST-GCN++ 3 lop nam tai
+`configs/action_recognition/stgcnpp_badminton_3class.py`. Ba lop gom
+`backhand_drive`, `forehand_lift` va `other`. Pipeline train tu dong tao
 rotation khoang +/-6.9 do va scale +/-10% moi epoch; validation va test khong
 augmentation.
 
@@ -116,7 +117,10 @@ the bo qua YOLOv8 va chay nhanh hon:
 python scripts/inference/classify_action.py outputs/video_pose.npz
 ```
 
-Ket qua gom nhan `backhand_drive` hoac `forehand_lift`, confidence, xac suat
-tung lop va thong so chat luong pose. ST-GCN++ phai chay trong moi truong
+Checkpoint epoch 6 hien tai van la model 2 lop cu. Sau khi train config 3 lop,
+truyen them `--action-config configs/action_recognition/stgcnpp_badminton_3class.py`
+va checkpoint 3 lop moi; ket qua khi do gom `backhand_drive`, `forehand_lift`
+hoac `other`, confidence, xac suat tung lop va thong so chat luong pose.
+ST-GCN++ phai chay trong moi truong
 Python 3.10 co PySKL/MMCV tuong thich nhu notebook Colab; neu chay tu video,
 moi truong do cung can cai Ultralytics.

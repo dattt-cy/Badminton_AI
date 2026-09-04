@@ -9,6 +9,7 @@ max_tracking_gap: 5
 classes:
   backhand_drive: 0
   forehand_lift: 1
+  other: 2
 
 recording_types:
   match:

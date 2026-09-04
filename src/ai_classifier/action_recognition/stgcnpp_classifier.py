@@ -10,7 +10,8 @@ import numpy as np
 
 from ai_classifier.pose import PoseSequence
 
-DEFAULT_LABELS = ("backhand_drive", "forehand_lift")
+TWO_CLASS_LABELS = ("backhand_drive", "forehand_lift")
+THREE_CLASS_LABELS = (*TWO_CLASS_LABELS, "other")
 
 
 @dataclass(frozen=True)
@@ -34,7 +35,7 @@ class STGCNPPClassifier:
         checkpoint_path: str | Path,
         *,
         device: str | None = None,
-        labels: Sequence[str] = DEFAULT_LABELS,
+        labels: Sequence[str] | None = None,
         min_detected_ratio: float = 0.5,
         min_mean_confidence: float = 0.3,
         model: Any | None = None,
@@ -42,11 +43,8 @@ class STGCNPPClassifier:
     ) -> None:
         self.config_path = Path(config_path)
         self.checkpoint_path = Path(checkpoint_path)
-        self.labels = tuple(labels)
         self.min_detected_ratio = min_detected_ratio
         self.min_mean_confidence = min_mean_confidence
-        if not self.labels:
-            raise ValueError("labels cannot be empty")
         if not 0 <= min_detected_ratio <= 1:
             raise ValueError("min_detected_ratio must be between 0 and 1")
         if not 0 <= min_mean_confidence <= 1:
@@ -54,6 +52,14 @@ class STGCNPPClassifier:
 
         if model is None:
             model, inference_fn = self._load_model(device)
+        if labels is None:
+            class_count = getattr(getattr(model, "cls_head", None), "num_classes", 2)
+            labels = {2: TWO_CLASS_LABELS, 3: THREE_CLASS_LABELS}.get(class_count)
+            if labels is None:
+                raise ValueError(f"No label mapping for a {class_count}-class model")
+        self.labels = tuple(labels)
+        if not self.labels:
+            raise ValueError("labels cannot be empty")
         if inference_fn is None:
             raise ValueError("inference_fn is required when injecting a model")
         self.model = model
