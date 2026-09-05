@@ -127,3 +127,21 @@ def test_match_source_does_not_span_splits(tmp_path: Path) -> None:
     assert len(dataset["split"]["train"]) == 10
     assert dataset["split"]["val"] == []
     assert dataset["split"]["test"] == []
+
+
+def test_recording_type_filter_excludes_match_clips(tmp_path: Path) -> None:
+    pose_root = tmp_path / "poses"
+    save_pose(pose_root / "backhand_drive" / "match" / "match_01.npz")
+    save_pose(
+        pose_root / "backhand_drive" / "single_player" / "single_01.npz"
+    )
+
+    dataset = build_pyskl_dataset(
+        pose_root,
+        tmp_path / "annotations.pkl",
+        {"backhand_drive": 0},
+        recording_types={"single_player"},
+    )
+
+    assert len(dataset["annotations"]) == 1
+    assert dataset["annotations"][0]["recording_type"] == "single_player"

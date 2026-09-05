@@ -19,6 +19,7 @@ def build_pyskl_dataset(
     seed: int = 42,
     min_detected_ratio: float = 0.8,
     min_mean_confidence: float = 0.6,
+    recording_types: set[str] | None = None,
 ) -> dict:
     """Build a stratified PySKL annotation dictionary from pose NPZ files."""
     if train_ratio <= 0 or val_ratio < 0 or train_ratio + val_ratio >= 1:
@@ -35,6 +36,10 @@ def build_pyskl_dataset(
             (pose_root / action).rglob("*.npz"), key=_natural_path_key
         )
         for pose_path in action_files:
+            relative_parts = pose_path.relative_to(pose_root).parts
+            recording_type = relative_parts[1]
+            if recording_types is not None and recording_type not in recording_types:
+                continue
             data = np.load(pose_path)
             keypoints = np.asarray(data["keypoints"], dtype=np.float32)
             if keypoints.ndim != 3 or keypoints.shape[1:] != (17, 3):
@@ -54,8 +59,6 @@ def build_pyskl_dataset(
                 continue
 
             identifier = pose_path.relative_to(pose_root).with_suffix("").as_posix()
-            relative_parts = pose_path.relative_to(pose_root).parts
-            recording_type = relative_parts[1]
             identifiers_by_stratum.setdefault((action, recording_type), []).append(
                 identifier
             )

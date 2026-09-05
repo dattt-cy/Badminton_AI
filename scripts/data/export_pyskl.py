@@ -33,6 +33,11 @@ def main() -> None:
         seed=int(split_config["seed"]),
         min_detected_ratio=float(quality_config.get("min_detected_ratio", 0.8)),
         min_mean_confidence=float(quality_config.get("min_mean_confidence", 0.6)),
+        recording_types=(
+            set(config["include_recording_types"])
+            if config.get("include_recording_types")
+            else None
+        ),
     )
     split = dataset["split"]
     split_by_identifier = {

@@ -10,6 +10,9 @@ classes:
   backhand_drive: 0
   forehand_lift: 1
 
+include_recording_types:
+  - single_player
+
 recording_types:
   match:
     target: far

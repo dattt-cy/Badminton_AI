@@ -82,11 +82,19 @@ Config train ST-GCN++ 2 lop nam tai
 rotation khoang +/-6.9 do va scale +/-10% moi epoch; validation va test khong
 augmentation.
 
-Vi cac clip `match` hien tai deu duoc cat tu cung mot tran, toan bo nguon nay
-chi duoc dua vao train de tranh ro ri sang validation/test. File
+Vi cac clip `match` hien tai deu duoc cat tu cung mot tran va tung lam lech
+phan bo du lieu, cau hinh mac dinh chi xuat cac nguon `single_player`. Cac clip
+match van duoc giu lai de bo sung sau khi co nhieu tran doc lap. File
 `data/annotations/badminton_actions.csv` ghi `source_group` de theo doi nguy
-co ro ri du lieu. Validation/test hien chi danh gia cac nguon single-player;
-can them tran moi truoc khi danh gia video thi dau chinh thuc.
+co ro ri du lieu. Bo du lieu sach hien co 83 train, 17 validation va 19 test.
+
+Co the kiem tra pipeline co hoc dung nhan bang bo sanity 10 mau:
+
+```bash
+python scripts/data/create_overfit_subset.py \
+  data/annotations/badminton_actions_2class.pkl \
+  data/annotations/badminton_overfit_10.pkl
+```
 
 Train tren GPU Google Colab bang notebook
 `notebooks/train_stgcnpp_2class_colab.ipynb`. Notebook tao moi truong PySKL
@@ -98,7 +106,7 @@ upload video tho.
 Dat checkpoint tot nhat tai:
 
 ```text
-models/checkpoints/action_recognition/best_top1_acc_epoch_6.pth
+models/checkpoints/action_recognition/best_top1_acc_2class_clean.pth
 ```
 
 Nhan dien truc tiep tu video tran dau (nguoi o san xa):

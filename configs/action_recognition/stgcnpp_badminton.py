@@ -77,8 +77,8 @@ optimizer = dict(type='SGD', lr=0.05, momentum=0.9, weight_decay=0.0005, nestero
 optimizer_config = dict(grad_clip=None)
 lr_config = dict(policy='CosineAnnealing', min_lr=0, by_epoch=False)
 total_epochs = 30
-checkpoint_config = dict(interval=1)
-evaluation = dict(interval=1, metrics=['top_k_accuracy'])
+checkpoint_config = dict(interval=5)
+evaluation = dict(interval=5, metrics=['top_k_accuracy'])
 log_config = dict(interval=20, hooks=[dict(type='TextLoggerHook')])
 log_level = 'INFO'
 work_dir = './work_dirs/stgcnpp_badminton'

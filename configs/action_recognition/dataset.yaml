@@ -10,6 +10,12 @@ classes:
   backhand_drive: 0
   forehand_lift: 1
 
+# The current match clips all come from one original recording and would
+# dominate training. Keep them archived, but train this model on independent
+# single-player sources only.
+include_recording_types:
+  - single_player
+
 recording_types:
   match:
     target: far
