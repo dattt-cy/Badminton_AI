@@ -145,3 +145,23 @@ def test_recording_type_filter_excludes_match_clips(tmp_path: Path) -> None:
 
     assert len(dataset["annotations"]) == 1
     assert dataset["annotations"][0]["recording_type"] == "single_player"
+
+
+def test_force_train_source_removes_it_from_evaluation(tmp_path: Path) -> None:
+    pose_root = tmp_path / "poses"
+    for index in range(5):
+        save_pose(
+            pose_root / "forehand_lift" / "single_player" / f"clip ({index}).npz"
+        )
+    forced_source = "forehand_lift/single_player/clip (4)"
+
+    dataset = build_pyskl_dataset(
+        pose_root,
+        tmp_path / "annotations.pkl",
+        {"forehand_lift": 0},
+        force_train_sources={forced_source},
+    )
+
+    assert forced_source in dataset["split"]["train"]
+    assert forced_source not in dataset["split"]["val"]
+    assert forced_source not in dataset["split"]["test"]

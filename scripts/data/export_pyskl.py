@@ -38,6 +38,7 @@ def main() -> None:
             if config.get("include_recording_types")
             else None
         ),
+        force_train_sources=set(config.get("force_train_sources", [])),
     )
     split = dataset["split"]
     split_by_identifier = {

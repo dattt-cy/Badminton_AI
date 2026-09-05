@@ -20,6 +20,7 @@ def build_pyskl_dataset(
     min_detected_ratio: float = 0.8,
     min_mean_confidence: float = 0.6,
     recording_types: set[str] | None = None,
+    force_train_sources: set[str] | None = None,
 ) -> dict:
     """Build a stratified PySKL annotation dictionary from pose NPZ files."""
     if train_ratio <= 0 or val_ratio < 0 or train_ratio + val_ratio >= 1:
@@ -108,6 +109,30 @@ def build_pyskl_dataset(
         for group, split_name in zip(groups, group_splits, strict=True):
             split[split_name].extend(group)
 
+    if force_train_sources:
+        unknown_sources = force_train_sources - set(source_by_identifier.values())
+        if unknown_sources:
+            raise ValueError(
+                "Unknown force_train_sources: " + ", ".join(sorted(unknown_sources))
+            )
+        forced_identifiers = {
+            identifier
+            for identifier, source in source_by_identifier.items()
+            if source in force_train_sources
+        }
+        for split_name in ("val", "test"):
+            split[split_name] = [
+                identifier
+                for identifier in split[split_name]
+                if identifier not in forced_identifiers
+            ]
+        existing_train = set(split["train"])
+        split["train"].extend(
+            identifier
+            for identifier in sorted(forced_identifiers, key=_identifier_key)
+            if identifier not in existing_train
+        )
+
     dataset = {"split": split, "annotations": annotations}
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -161,3 +186,7 @@ def _natural_path_key(path: Path) -> list[int | str]:
         int(part) if part.isdigit() else part.lower()
         for part in re.split(r"(\d+)", path.as_posix())
     ]
+
+
+def _identifier_key(identifier: str) -> list[int | str]:
+    return _natural_path_key(Path(identifier))

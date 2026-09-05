@@ -16,6 +16,12 @@ classes:
 include_recording_types:
   - single_player
 
+# Explicit user-approved additions for model fitting. Keeping this in config
+# prevents them from silently moving back to validation/test on the next export.
+force_train_sources:
+  - forehand_lift/single_player/forehand_lift (75)
+  - forehand_lift/single_player/forehand_lift (76)
+
 recording_types:
   match:
     target: far

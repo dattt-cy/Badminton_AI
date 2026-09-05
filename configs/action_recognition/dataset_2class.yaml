@@ -13,6 +13,10 @@ classes:
 include_recording_types:
   - single_player
 
+force_train_sources:
+  - forehand_lift/single_player/forehand_lift (75)
+  - forehand_lift/single_player/forehand_lift (76)
+
 recording_types:
   match:
     target: far
