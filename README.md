@@ -122,3 +122,21 @@ lop va thong so chat luong pose.
 ST-GCN++ phai chay trong moi truong
 Python 3.10 co PySKL/MMCV tuong thich nhu notebook Colab; neu chay tu video,
 moi truong do cung can cai Ultralytics.
+
+### Chay inference local bang WSL2 + NVIDIA GPU
+
+May da cai moi truong `badminton-pyskl` trong WSL2 Ubuntu. Tu PowerShell tai
+thu muc du an, chay:
+
+```powershell
+.\scripts\inference\classify_action_wsl.ps1 "data\inference\video.mp4"
+```
+
+Video mot nguoi mac dinh dung `-Target single`. Voi nguoi o nua san xa:
+
+```powershell
+.\scripts\inference\classify_action_wsl.ps1 "data\inference\match.mp4" -Target far
+```
+
+Ket qua JSON va pose NPZ duoc luu trong `outputs/`. Wrapper tu dong dung Python
+3.10, PySKL, MMCV va CUDA cua WSL; khong can activate Conda thu cong.
