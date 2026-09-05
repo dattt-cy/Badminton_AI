@@ -76,22 +76,22 @@ Xoay va scale du lieu duoc cau hinh de augmentation skeleton trong luc train,
 khong nhan ban video vat ly. Cau hinh dataset nam tai
 `configs/action_recognition/dataset.yaml`.
 
-Config train ST-GCN++ 3 lop nam tai
-`configs/action_recognition/stgcnpp_badminton_3class.py`. Ba lop gom
-`backhand_drive`, `forehand_lift` va `other`. Pipeline train tu dong tao
+Config train ST-GCN++ 2 lop nam tai
+`configs/action_recognition/stgcnpp_badminton.py`. Hai lop gom
+`backhand_drive` va `forehand_lift`. Pipeline train tu dong tao
 rotation khoang +/-6.9 do va scale +/-10% moi epoch; validation va test khong
 augmentation.
 
-Vi cac clip `match` hien tai deu duoc cat tu cung mot tran, split duoc tao theo
-cac block lien tiep va chi phu hop lam baseline thu nghiem. File
+Vi cac clip `match` hien tai deu duoc cat tu cung mot tran, toan bo nguon nay
+chi duoc dua vao train de tranh ro ri sang validation/test. File
 `data/annotations/badminton_actions.csv` ghi `source_group` de theo doi nguy
-co ro ri du lieu. Can them tran hoac nguoi choi moi truoc khi danh gia chinh
-thuc.
+co ro ri du lieu. Validation/test hien chi danh gia cac nguon single-player;
+can them tran moi truoc khi danh gia video thi dau chinh thuc.
 
 Train tren GPU Google Colab bang notebook
-`notebooks/train_stgcnpp_colab.ipynb`. Notebook tao moi truong PySKL Python
-3.10 rieng tren Colab; chi can upload `badminton_actions.pkl`, khong can upload
-video tho.
+`notebooks/train_stgcnpp_2class_colab.ipynb`. Notebook tao moi truong PySKL
+Python 3.10 rieng tren Colab; upload `badminton_actions_2class.pkl`, khong can
+upload video tho.
 
 ## Nhan dien dong tac
 
@@ -117,10 +117,8 @@ the bo qua YOLOv8 va chay nhanh hon:
 python scripts/inference/classify_action.py outputs/video_pose.npz
 ```
 
-Checkpoint epoch 6 hien tai van la model 2 lop cu. Sau khi train config 3 lop,
-truyen them `--action-config configs/action_recognition/stgcnpp_badminton_3class.py`
-va checkpoint 3 lop moi; ket qua khi do gom `backhand_drive`, `forehand_lift`
-hoac `other`, confidence, xac suat tung lop va thong so chat luong pose.
+Ket qua gom `backhand_drive` hoac `forehand_lift`, confidence, xac suat tung
+lop va thong so chat luong pose.
 ST-GCN++ phai chay trong moi truong
 Python 3.10 co PySKL/MMCV tuong thich nhu notebook Colab; neu chay tu video,
 moi truong do cung can cai Ultralytics.

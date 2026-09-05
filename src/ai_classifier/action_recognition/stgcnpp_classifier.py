@@ -11,7 +11,6 @@ import numpy as np
 from ai_classifier.pose import PoseSequence
 
 TWO_CLASS_LABELS = ("backhand_drive", "forehand_lift")
-THREE_CLASS_LABELS = (*TWO_CLASS_LABELS, "other")
 
 
 @dataclass(frozen=True)
@@ -54,9 +53,9 @@ class STGCNPPClassifier:
             model, inference_fn = self._load_model(device)
         if labels is None:
             class_count = getattr(getattr(model, "cls_head", None), "num_classes", 2)
-            labels = {2: TWO_CLASS_LABELS, 3: THREE_CLASS_LABELS}.get(class_count)
-            if labels is None:
+            if class_count != len(TWO_CLASS_LABELS):
                 raise ValueError(f"No label mapping for a {class_count}-class model")
+            labels = TWO_CLASS_LABELS
         self.labels = tuple(labels)
         if not self.labels:
             raise ValueError("labels cannot be empty")

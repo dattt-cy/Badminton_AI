@@ -38,9 +38,11 @@ def test_build_pyskl_dataset_shapes_and_splits(tmp_path: Path) -> None:
     )
 
     assert len(dataset["annotations"]) == 20
-    assert len(dataset["split"]["train"]) == 14
-    assert len(dataset["split"]["val"]) == 4
-    assert len(dataset["split"]["test"]) == 2
+    # All match clips currently share one original source, so they must stay
+    # together even though this leaves no honest evaluation split here.
+    assert len(dataset["split"]["train"]) == 20
+    assert len(dataset["split"]["val"]) == 0
+    assert len(dataset["split"]["test"]) == 0
     annotation = dataset["annotations"][0]
     assert annotation["keypoint"].shape == (1, 8, 17, 2)
     assert annotation["keypoint_score"].shape == (1, 8, 17)
@@ -107,5 +109,21 @@ def test_single_player_source_group_does_not_span_splits(tmp_path: Path) -> None
 
 def test_five_sources_keep_train_validation_and_test_sources() -> None:
     assert _source_group_splits(
-        5, train_ratio=0.70, val_ratio=0.15
-    ) == ["train", "train", "train", "val", "test"]
+        [1, 1, 1, 1, 1], train_ratio=0.70, val_ratio=0.15
+    ) == ["train", "train", "train", "test", "val"]
+
+
+def test_match_source_does_not_span_splits(tmp_path: Path) -> None:
+    pose_root = tmp_path / "poses"
+    for index in range(10):
+        save_pose(pose_root / "backhand_drive" / "match" / f"{index:03}.npz")
+
+    dataset = build_pyskl_dataset(
+        pose_root,
+        tmp_path / "annotations.pkl",
+        {"backhand_drive": 0},
+    )
+
+    assert len(dataset["split"]["train"]) == 10
+    assert dataset["split"]["val"] == []
+    assert dataset["split"]["test"] == []

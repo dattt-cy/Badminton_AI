@@ -89,30 +89,21 @@ def build_pyskl_dataset(
         )
 
     split = {"train": [], "val": [], "test": []}
-    # Keep adjacent clips together in ordered blocks. Match clips still share
-    # one source, so this is only an exploratory baseline split.
-    for (_, recording_type), identifiers in identifiers_by_stratum.items():
-        count = len(identifiers)
-        train_end = round(count * train_ratio)
-        val_end = train_end + round(count * val_ratio)
-        if recording_type == "single_player":
-            groups: list[list[str]] = []
-            for identifier in identifiers:
-                source_group = source_by_identifier[identifier]
-                if not groups or source_by_identifier[groups[-1][0]] != source_group:
-                    groups.append([])
-                groups[-1].append(identifier)
-            group_splits = _source_group_splits(
-                len(groups), train_ratio=train_ratio, val_ratio=val_ratio
-            )
-            for group, split_name in zip(groups, group_splits, strict=True):
-                split[split_name].extend(group)
-        else:
-            # All current match clips share one original match, so retain the
-            # contiguous exploratory baseline until more match sources exist.
-            split["train"].extend(identifiers[:train_end])
-            split["val"].extend(identifiers[train_end:val_end])
-            split["test"].extend(identifiers[val_end:])
+    # Keep every original recording wholly inside one split.
+    for _, identifiers in identifiers_by_stratum.items():
+        groups: list[list[str]] = []
+        for identifier in identifiers:
+            source_group = source_by_identifier[identifier]
+            if not groups or source_by_identifier[groups[-1][0]] != source_group:
+                groups.append([])
+            groups[-1].append(identifier)
+        group_splits = _source_group_splits(
+            [len(group) for group in groups],
+            train_ratio=train_ratio,
+            val_ratio=val_ratio,
+        )
+        for group, split_name in zip(groups, group_splits, strict=True):
+            split[split_name].extend(group)
 
     dataset = {"split": split, "annotations": annotations}
     output_path = Path(output_path)
@@ -123,9 +114,10 @@ def build_pyskl_dataset(
 
 
 def _source_group_splits(
-    group_count: int, *, train_ratio: float, val_ratio: float
+    group_sizes: list[int], *, train_ratio: float, val_ratio: float
 ) -> list[str]:
-    """Assign whole sources while retaining evaluation splits when possible."""
+    """Assign whole sources while balancing clip counts across splits."""
+    group_count = len(group_sizes)
     if group_count <= 0:
         return []
     if group_count == 1:
@@ -133,18 +125,23 @@ def _source_group_splits(
     if group_count == 2:
         return ["train", "test"]
 
-    test_ratio = 1.0 - train_ratio - val_ratio
-    val_count = max(1, round(group_count * val_ratio))
-    test_count = max(1, round(group_count * test_ratio))
-    if val_count + test_count >= group_count:
-        val_count = 1
-        test_count = 1
-    train_count = group_count - val_count - test_count
-    return (
-        ["train"] * train_count
-        + ["val"] * val_count
-        + ["test"] * test_count
-    )
+    split_names = ("train", "val", "test")
+    ratios = (train_ratio, val_ratio, 1.0 - train_ratio - val_ratio)
+    total = sum(group_sizes)
+    targets = {name: total * ratio for name, ratio in zip(split_names, ratios)}
+    assigned = {name: 0 for name in split_names}
+    result = ["train"] * group_count
+
+    # Place large sources first because they are hardest to balance without
+    # leaking clips from one recording into multiple splits.
+    for index in sorted(range(group_count), key=lambda i: (-group_sizes[i], i)):
+        split_name = max(
+            split_names,
+            key=lambda name: targets[name] - assigned[name],
+        )
+        result[index] = split_name
+        assigned[split_name] += group_sizes[index]
+    return result
 
 
 def _single_player_source_group(identifier: str) -> str:
