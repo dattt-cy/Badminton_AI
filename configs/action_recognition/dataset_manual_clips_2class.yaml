@@ -1,0 +1,30 @@
+dataset_root: data/manual_clips
+pose_output_root: data/processed/manual_clips_2class_poses
+annotation_output: data/annotations/manual_clips_2class.pkl
+
+model: yolov8n-pose.pt
+device: null
+
+classes:
+  backhand_drive: 0
+  forehand_clear: 1
+
+splits: [train, val]
+
+views:
+  front:
+    target: single
+    image_size: 640
+  side:
+    target: single
+    image_size: 640
+
+smoothing:
+  alpha: 0.35
+  min_confidence: 0.30
+  max_gap: 4
+
+quality:
+  min_frames: 30
+  min_detected_ratio: 0.80
+  min_mean_confidence: 0.30
