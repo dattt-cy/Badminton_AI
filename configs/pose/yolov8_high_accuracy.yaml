@@ -1,0 +1,14 @@
+# Higher-cost pose extraction preset for technique assessment.
+model: yolov8x-pose.pt
+confidence: 0.35
+image_size: 960
+device: null
+tracking_distance_weight: 1.0
+max_tracking_distance: 0.15
+max_tracking_gap: 5
+target_region: any
+smoothing:
+  enabled: true
+  alpha: 0.35
+  min_confidence: 0.4
+  max_gap: 3

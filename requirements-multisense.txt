@@ -1,0 +1,3 @@
+# Optional dependencies for scripts/data/export_multisense_geometry.py
+h5py>=3.10
+openpyxl>=3.1
