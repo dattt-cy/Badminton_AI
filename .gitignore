@@ -19,9 +19,14 @@ data/raw/**
 !data/raw/README.md
 data/interim/*
 data/processed/*
+data/manual_clips/
+data/multisense/
+data/expert_reference/
 models/checkpoints/*
 models/exports/*
 outputs/*
+work_dirs/
+docs/*.pdf
 
 # Keep directory structure
 !**/.gitkeep
