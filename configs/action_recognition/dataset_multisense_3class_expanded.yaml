@@ -1,0 +1,36 @@
+dataset_root: data/action_recognition_3class_expanded
+annotation_output: data/annotations/multisense_actions_3class_expanded.pkl
+
+classes:
+  background: 0
+  backhand_drive: 1
+  forehand_clear: 2
+
+# Every subject occurs in exactly one split. Subjects without enough valid examples
+# of both strokes are intentionally excluded from this first expanded experiment.
+subject_split:
+  train: [Sub11, Sub13, Sub15, Sub19]
+  val: [Sub20]
+  test: [Sub22, Sub24]
+
+views: [front]
+positive_clips_per_subject_class: 20
+background_clips_per_source_video: 10
+balance_per_subject: true
+max_per_subject_class: 20
+
+clip_seconds: 2.6
+positive_seconds_before_motion_peak: 1.4
+positive_seconds_after_motion_peak: 1.2
+
+quality:
+  min_detected_ratio: 0.80
+  min_mean_confidence: 0.30
+
+notes:
+  - Part2 and Part3 provide paired backhand-drive and forehand-clear recordings.
+  - Subjects with fewer than ten valid strokes in either class are excluded because
+    their video-to-sensor synchronization cannot be estimated reliably.
+  - The legacy web clips stay outside this dataset and serve as out-of-domain tests.
+  - Balance each subject separately so camera/person identity cannot predict a class.
+  - Never move a subject between splits after looking at test predictions.

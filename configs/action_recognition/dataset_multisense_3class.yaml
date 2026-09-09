@@ -1,0 +1,27 @@
+dataset_root: data/action_recognition_3class
+annotation_output: data/annotations/multisense_actions_3class.pkl
+
+classes:
+  background: 0
+  backhand_drive: 1
+  forehand_clear: 2
+
+subject_split:
+  train: [Sub11, Sub19]
+  val: [Sub20]
+  test: [Sub24]
+
+clip_seconds: 2.6
+positive_seconds_before_motion_peak: 1.4
+positive_seconds_after_motion_peak: 1.2
+
+quality:
+  min_detected_ratio: 0.80
+  min_body_scale_px: 30
+  max_scale_cv: 0.25
+  max_wrist_speed_spike_ratio: 3.0
+
+notes:
+  - Positive clips are recentered on a 2D wrist-motion peak inside an annotated trial.
+  - Background clips come from gaps between synchronized annotated trials.
+  - Splits are fixed by subject; never randomly split strokes from one subject.
