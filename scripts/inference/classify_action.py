@@ -22,13 +22,13 @@ def parse_args() -> argparse.Namespace:
         "--checkpoint",
         type=Path,
         default=Path(
-            "models/checkpoints/action_recognition/best_top1_acc_epoch_6.pth"
+            "models/checkpoints/action_recognition/best_top1_acc_3class.pth"
         ),
     )
     parser.add_argument(
         "--action-config",
         type=Path,
-        default=Path("configs/action_recognition/stgcnpp_badminton.py"),
+        default=Path("configs/action_recognition/stgcnpp_multisense_3class.py"),
     )
     parser.add_argument(
         "--pose-config",
@@ -42,6 +42,40 @@ def parse_args() -> argparse.Namespace:
         help="Player to track when the input is a video",
     )
     parser.add_argument("--device", help="ST-GCN++ device, e.g. cuda:0 or cpu")
+    parser.add_argument(
+        "--no-motion-align",
+        action="store_true",
+        help="Classify the whole pose sequence instead of a swing-aligned window",
+    )
+    parser.add_argument(
+        "--window-seconds",
+        type=float,
+        default=3.5,
+        help="Motion-aligned window duration in seconds (default: 3.5)",
+    )
+    parser.add_argument(
+        "--window-frames",
+        type=int,
+        help="Override the motion-aligned duration with an exact frame count",
+    )
+    parser.add_argument(
+        "--peak-position",
+        type=float,
+        default=0.55,
+        help="Target motion-peak position inside the aligned window (default: 0.55)",
+    )
+    parser.add_argument(
+        "--handedness",
+        choices=("left", "right"),
+        default="right",
+        help="Racket hand used to locate the swing",
+    )
+    parser.add_argument(
+        "--min-action-confidence",
+        type=float,
+        default=0.75,
+        help="Return an uncertain decision below this confidence (default: 0.75)",
+    )
     parser.add_argument("--pose-output", type=Path, help="Optionally save pose NPZ")
     parser.add_argument("--json-output", type=Path, help="Optionally save prediction JSON")
     return parser.parse_args()
@@ -85,6 +119,8 @@ def main() -> None:
     args = parse_args()
     if not args.input.is_file():
         raise FileNotFoundError(f"Input not found: {args.input}")
+    if not 0.0 <= args.min_action_confidence <= 1.0:
+        raise ValueError("--min-action-confidence must be between 0 and 1")
 
     sequence = (
         load_pose(args.input)
@@ -99,8 +135,25 @@ def main() -> None:
         args.checkpoint,
         device=args.device,
     )
-    prediction = classifier.predict(sequence)
+    prediction = (
+        classifier.predict(sequence)
+        if args.no_motion_align
+        else classifier.predict_aligned(
+            sequence,
+            window_seconds=args.window_seconds,
+            window_frames=args.window_frames,
+            peak_position=args.peak_position,
+            handedness=args.handedness,
+        )
+    )
     result = asdict(prediction)
+    result["decision"] = (
+        prediction.label
+        if prediction.confidence >= args.min_action_confidence
+        else "uncertain"
+    )
+    result["accepted"] = prediction.confidence >= args.min_action_confidence
+    result["min_action_confidence"] = args.min_action_confidence
     rendered = json.dumps(result, ensure_ascii=False, indent=2)
     print(rendered)
     if args.json_output:

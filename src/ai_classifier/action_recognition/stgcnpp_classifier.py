@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
 import numpy as np
 
+from ai_classifier.biomechanics import extract_geometry_features
 from ai_classifier.pose import PoseSequence
+from ai_classifier.segmentation import motion_score
 
 TWO_CLASS_LABELS = ("backhand_drive", "forehand_lift")
+THREE_CLASS_LABELS = ("background", "backhand_drive", "forehand_clear")
 
 
 @dataclass(frozen=True)
@@ -23,6 +26,13 @@ class ActionPrediction:
     frame_count: int
     detected_ratio: float
     mean_confidence: float
+    source_frame_count: int
+    alignment_applied: bool
+    window_start_frame: int
+    window_end_frame: int
+    motion_peak_frame: int | None
+    padding_start_frames: int
+    padding_end_frames: int
 
 
 class STGCNPPClassifier:
@@ -37,6 +47,7 @@ class STGCNPPClassifier:
         labels: Sequence[str] | None = None,
         min_detected_ratio: float = 0.5,
         min_mean_confidence: float = 0.3,
+        model_clip_frames: int = 64,
         model: Any | None = None,
         inference_fn: Callable[[Any, dict], list[tuple[int, float]]] | None = None,
     ) -> None:
@@ -44,18 +55,32 @@ class STGCNPPClassifier:
         self.checkpoint_path = Path(checkpoint_path)
         self.min_detected_ratio = min_detected_ratio
         self.min_mean_confidence = min_mean_confidence
+        self.model_clip_frames = model_clip_frames
         if not 0 <= min_detected_ratio <= 1:
             raise ValueError("min_detected_ratio must be between 0 and 1")
         if not 0 <= min_mean_confidence <= 1:
             raise ValueError("min_mean_confidence must be between 0 and 1")
+        if model_clip_frames <= 0:
+            raise ValueError("model_clip_frames must be positive")
 
         if model is None:
             model, inference_fn = self._load_model(device)
         if labels is None:
             class_count = getattr(getattr(model, "cls_head", None), "num_classes", 2)
-            if class_count != len(TWO_CLASS_LABELS):
+            configured_labels = getattr(getattr(model, "cfg", None), "class_names", None)
+            if configured_labels is not None:
+                labels = tuple(str(label) for label in configured_labels)
+                if len(labels) != class_count:
+                    raise ValueError(
+                        f"Config defines {len(labels)} class names for a "
+                        f"{class_count}-class model"
+                    )
+            elif class_count == len(TWO_CLASS_LABELS):
+                labels = TWO_CLASS_LABELS
+            elif class_count == len(THREE_CLASS_LABELS):
+                labels = THREE_CLASS_LABELS
+            else:
                 raise ValueError(f"No label mapping for a {class_count}-class model")
-            labels = TWO_CLASS_LABELS
         self.labels = tuple(labels)
         if not self.labels:
             raise ValueError("labels cannot be empty")
@@ -78,6 +103,7 @@ class STGCNPPClassifier:
                 f"< {self.min_mean_confidence:.3f}"
             )
 
+        annotation, padding_start, padding_end = self._pad_short_annotation(annotation)
         ranked_scores = self._inference(self.model, annotation)
         scores = {
             self.labels[int(index)]: float(score)
@@ -96,7 +122,115 @@ class STGCNPPClassifier:
             frame_count=int(sequence.keypoints.shape[0]),
             detected_ratio=detected_ratio,
             mean_confidence=mean_confidence,
+            source_frame_count=int(sequence.keypoints.shape[0]),
+            alignment_applied=False,
+            window_start_frame=0,
+            window_end_frame=int(sequence.keypoints.shape[0]),
+            motion_peak_frame=None,
+            padding_start_frames=padding_start,
+            padding_end_frames=padding_end,
         )
+
+    def predict_aligned(
+        self,
+        sequence: PoseSequence,
+        *,
+        window_seconds: float = 3.5,
+        window_frames: int | None = None,
+        peak_position: float = 0.55,
+        handedness: str = "right",
+    ) -> ActionPrediction:
+        """Find the strongest swing and classify a time-normalized window.
+
+        Missing context at either video boundary is filled by repeating the
+        boundary pose. This prevents PySKL's short-clip sampler from wrapping
+        the end of an action back to its beginning.
+        """
+        if window_seconds <= 0:
+            raise ValueError("window_seconds must be positive")
+        if window_frames is not None and window_frames <= 0:
+            raise ValueError("window_frames must be positive")
+        if not 0.0 <= peak_position <= 1.0:
+            raise ValueError("peak_position must be between 0 and 1")
+        if handedness not in {"left", "right"}:
+            raise ValueError("handedness must be left or right")
+
+        source_frames = int(sequence.keypoints.shape[0])
+        if source_frames == 0:
+            return self.predict(sequence)
+        if sequence.fps <= 0 and window_frames is None:
+            raise ValueError("fps must be positive when using window_seconds")
+
+        target_frames = (
+            int(window_frames)
+            if window_frames is not None
+            else max(self.model_clip_frames, int(round(window_seconds * sequence.fps)))
+        )
+
+        features = extract_geometry_features(sequence, handedness=handedness)
+        scores = motion_score(features)
+        peak_frame = int(np.argmax(scores)) if len(scores) and scores.max() > 0 else None
+
+        if peak_frame is None:
+            requested_start = (source_frames - target_frames) // 2
+        else:
+            peak_offset = int(round(peak_position * (target_frames - 1)))
+            requested_start = peak_frame - peak_offset
+        requested_end = requested_start + target_frames
+        start_frame = max(0, requested_start)
+        end_frame = min(source_frames, requested_end)
+        padding_start = max(0, -requested_start)
+        padding_end = max(0, requested_end - source_frames)
+        keypoints = np.asarray(sequence.keypoints)[start_frame:end_frame]
+        if padding_start or padding_end:
+            keypoints = np.pad(
+                keypoints,
+                ((padding_start, padding_end), (0, 0), (0, 0)),
+                mode="edge",
+            )
+        if len(keypoints) != target_frames:
+            raise RuntimeError(
+                f"Aligned window has {len(keypoints)} frames, expected {target_frames}"
+            )
+        aligned = PoseSequence(
+            np.asarray(keypoints, dtype=np.float32),
+            sequence.fps,
+            sequence.frame_width,
+            sequence.frame_height,
+        )
+        prediction = self.predict(aligned)
+        return replace(
+            prediction,
+            source_frame_count=source_frames,
+            alignment_applied=True,
+            window_start_frame=start_frame,
+            window_end_frame=end_frame,
+            motion_peak_frame=peak_frame,
+            padding_start_frames=padding_start + prediction.padding_start_frames,
+            padding_end_frames=padding_end + prediction.padding_end_frames,
+        )
+
+    def _pad_short_annotation(self, annotation: dict) -> tuple[dict, int, int]:
+        """Edge-pad inputs so UniformSample never circularly wraps a clip."""
+        frame_count = int(annotation["total_frames"])
+        if frame_count >= self.model_clip_frames:
+            return annotation, 0, 0
+        padding = self.model_clip_frames - frame_count
+        padding_start = padding // 2
+        padding_end = padding - padding_start
+        padded = dict(annotation)
+        padded["keypoint"] = np.pad(
+            annotation["keypoint"],
+            ((0, 0), (padding_start, padding_end), (0, 0), (0, 0)),
+            mode="edge",
+        )
+        padded["keypoint_score"] = np.pad(
+            annotation["keypoint_score"],
+            ((0, 0), (padding_start, padding_end), (0, 0)),
+            mode="edge",
+        )
+        padded["total_frames"] = self.model_clip_frames
+        return padded, padding_start, padding_end
 
     @staticmethod
     def prepare_input(sequence: PoseSequence) -> tuple[dict, float, float]:
@@ -122,6 +256,7 @@ class STGCNPPClassifier:
             "original_shape": (sequence.frame_height, sequence.frame_width),
             "start_index": 0,
             "modality": "Pose",
+            "test_mode": True,
             "keypoint": keypoints[None, ..., :2],
             "keypoint_score": confidence[None, ...],
         }
