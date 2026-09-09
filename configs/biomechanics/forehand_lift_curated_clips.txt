@@ -1,0 +1,13 @@
+# Visually reviewed instructional/single-stroke clips that also pass the
+# automated pose-stability and phase-quality gates.
+forehand_lift (22).npz
+forehand_lift (18).npz
+forehand_lift (13).npz
+forehand_lift (32).npz
+forehand_lift (3).npz
+forehand_lift (23).npz
+forehand_lift (35).npz
+forehand_lift (29).npz
+forehand_lift (25).npz
+forehand_lift (21).npz
+forehand_lift (11).npz

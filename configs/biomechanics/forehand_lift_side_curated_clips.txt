@@ -1,0 +1,6 @@
+# Side/side-on instructional forehand lifts. Same motion family and camera geometry.
+forehand_lift (13).npz
+forehand_lift (18).npz
+forehand_lift (23).npz
+forehand_lift (32).npz
+forehand_lift (37).npz

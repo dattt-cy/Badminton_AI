@@ -1,0 +1,11 @@
+# Automatically quality-filtered; pending visual expert review.
+side/Sub11/Sub11_forehand_clear_side_145_pose.npz
+side/Sub11/Sub11_forehand_clear_side_121_pose.npz
+side/Sub11/Sub11_forehand_clear_side_157_pose.npz
+side/Sub11/Sub11_forehand_clear_side_098_pose.npz
+side/Sub11/Sub11_forehand_clear_side_090_pose.npz
+side/Sub11/Sub11_forehand_clear_side_075_pose.npz
+side/Sub11/Sub11_forehand_clear_side_142_pose.npz
+side/Sub11/Sub11_forehand_clear_side_063_pose.npz
+side/Sub19/Sub19_forehand_clear_side_004_pose.npz
+side/Sub24/Sub24_forehand_clear_side_118_pose.npz

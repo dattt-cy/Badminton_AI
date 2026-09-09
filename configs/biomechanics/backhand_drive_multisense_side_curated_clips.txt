@@ -1,0 +1,12 @@
+# Automatically quality-filtered; pending visual expert review.
+side/Sub11/Sub11_backhand_drive_side_101_pose.npz
+side/Sub11/Sub11_backhand_drive_side_049_pose.npz
+side/Sub19/Sub19_backhand_drive_side_048_pose.npz
+side/Sub24/Sub24_backhand_drive_side_031_pose.npz
+side/Sub24/Sub24_backhand_drive_side_012_pose.npz
+side/Sub24/Sub24_backhand_drive_side_041_pose.npz
+side/Sub24/Sub24_backhand_drive_side_019_pose.npz
+side/Sub24/Sub24_backhand_drive_side_001_pose.npz
+side/Sub24/Sub24_backhand_drive_side_022_pose.npz
+side/Sub24/Sub24_backhand_drive_side_062_pose.npz
+side/Sub24/Sub24_backhand_drive_side_103_pose.npz

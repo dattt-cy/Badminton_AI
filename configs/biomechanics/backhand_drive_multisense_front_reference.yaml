@@ -1,0 +1,227 @@
+technique: backhand_drive
+view: front
+registry: configs\biomechanics\techniques.yaml
+handedness: right
+sample_count: 13
+minimum_reference_clips: 10
+reference_status: provisional
+min_scale_px: 30.0
+top_n: null
+clips_used:
+- front/Sub24/Sub24_backhand_drive_front_076_pose.npz
+- front/Sub24/Sub24_backhand_drive_front_010_pose.npz
+- front/Sub19/Sub19_backhand_drive_front_070_pose.npz
+- front/Sub19/Sub19_backhand_drive_front_064_pose.npz
+- front/Sub19/Sub19_backhand_drive_front_050_pose.npz
+- front/Sub19/Sub19_backhand_drive_front_047_pose.npz
+- front/Sub19/Sub19_backhand_drive_front_088_pose.npz
+- front/Sub19/Sub19_backhand_drive_front_098_pose.npz
+- front/Sub19/Sub19_backhand_drive_front_104_pose.npz
+- front/Sub11/Sub11_backhand_drive_front_097_pose.npz
+- front/Sub11/Sub11_backhand_drive_front_119_pose.npz
+- front/Sub11/Sub11_backhand_drive_front_062_pose.npz
+- front/Sub11/Sub11_backhand_drive_front_164_pose.npz
+phase_feature_ranges:
+  elbow_too_close_to_torso:
+    low: 0.7557708263397217
+    high: 0.8850049495697021
+    buffer_ratio: 0.05
+  preparation_arm_position_outlier:
+    low: 0.5397664427757264
+    high: 1.053657603263855
+    buffer_ratio: 0.05
+  stance_too_narrow:
+    low: 0.8627153396606445
+    high: 1.677371335029602
+    buffer_ratio: 0.05
+  backswing_elbow_angle_outlier:
+    low: 70.54356536865235
+    high: 159.48179321289064
+    buffer_ratio: 0.05
+  backswing_wrist_height_outlier:
+    low: -0.9429455280303956
+    high: -0.4448079109191894
+    buffer_ratio: 0.05
+  excessive_torso_lean_in_forward_swing:
+    low: 0.8228493809700013
+    high: 9.027647781372071
+    buffer_ratio: 0.05
+  insufficient_reach:
+    low: 0.5873592972755433
+    high: 1.066472625732422
+    buffer_ratio: 0.05
+  arm_not_extended_near_contact:
+    low: 92.13759918212891
+    high: 161.9611389160156
+    buffer_ratio: 0.05
+  contact_wrist_height_outlier:
+    low: -1.0339713215827941
+    high: -0.16334131956100462
+    buffer_ratio: 0.05
+  limited_follow_through:
+    low: 0.7155319571495057
+    high: 1.2590615034103394
+    buffer_ratio: 0.05
+  follow_through_elbow_angle_outlier:
+    low: 103.08937988281251
+    high: 157.0717987060547
+    buffer_ratio: 0.05
+rules:
+  elbow_too_close_to_torso:
+    feature: elbow_torso_distance
+    phase: backswing
+    direction: lower
+    low: 0.7557708263397217
+    high: 0.8850049495697021
+    buffer_ratio: 0.05
+    min_confidence: 0.6
+    min_valid_frames: 5
+    min_valid_ratio: 0.6
+    compatible_views:
+    - front
+  preparation_arm_position_outlier:
+    feature: wrist_shoulder_distance
+    phase: preparation
+    direction: two_sided
+    low: 0.5397664427757264
+    high: 1.053657603263855
+    buffer_ratio: 0.05
+    min_confidence: 0.6
+    min_valid_frames: 5
+    min_valid_ratio: 0.6
+    compatible_views:
+    - front
+    - side
+  stance_too_narrow:
+    feature: stance_width
+    phase: preparation
+    direction: lower
+    low: 0.8627153396606445
+    high: 1.677371335029602
+    buffer_ratio: 0.05
+    min_confidence: 0.6
+    min_valid_frames: 5
+    min_valid_ratio: 0.6
+    compatible_views:
+    - front
+  backswing_elbow_angle_outlier:
+    feature: elbow_angle
+    phase: backswing
+    direction: two_sided
+    low: 70.54356536865235
+    high: 159.48179321289064
+    buffer_ratio: 0.05
+    min_confidence: 0.6
+    min_valid_frames: 5
+    min_valid_ratio: 0.6
+    compatible_views:
+    - front
+    - side
+  backswing_wrist_height_outlier:
+    feature: wrist_height
+    phase: backswing
+    direction: two_sided
+    low: -0.9429455280303956
+    high: -0.4448079109191894
+    buffer_ratio: 0.05
+    min_confidence: 0.6
+    min_valid_frames: 5
+    min_valid_ratio: 0.6
+    compatible_views:
+    - front
+    - side
+  excessive_torso_lean_in_forward_swing:
+    feature: torso_lean
+    phase: forward_swing
+    direction: upper
+    low: 0.8228493809700013
+    high: 9.027647781372071
+    buffer_ratio: 0.05
+    min_confidence: 0.6
+    min_valid_frames: 3
+    min_valid_ratio: 0.6
+    compatible_views:
+    - front
+    - side
+  insufficient_reach:
+    feature: wrist_shoulder_distance
+    phase: contact_estimated
+    direction: lower
+    low: 0.5873592972755433
+    high: 1.066472625732422
+    buffer_ratio: 0.05
+    min_confidence: 0.6
+    min_valid_frames: 3
+    min_valid_ratio: 0.6
+    compatible_views:
+    - front
+    - side
+  arm_not_extended_near_contact:
+    feature: elbow_angle
+    phase: contact_estimated
+    direction: lower
+    low: 92.13759918212891
+    high: 161.9611389160156
+    buffer_ratio: 0.05
+    min_confidence: 0.6
+    min_valid_frames: 3
+    min_valid_ratio: 0.6
+    compatible_views:
+    - front
+    - side
+  contact_wrist_height_outlier:
+    feature: wrist_height
+    phase: contact_estimated
+    direction: two_sided
+    low: -1.0339713215827941
+    high: -0.16334131956100462
+    buffer_ratio: 0.05
+    min_confidence: 0.6
+    min_valid_frames: 3
+    min_valid_ratio: 0.6
+    compatible_views:
+    - front
+    - side
+  limited_follow_through:
+    feature: wrist_shoulder_distance
+    phase: follow_through
+    direction: lower
+    low: 0.7155319571495057
+    high: 1.2590615034103394
+    buffer_ratio: 0.05
+    min_confidence: 0.6
+    min_valid_frames: 3
+    min_valid_ratio: 0.6
+    compatible_views:
+    - front
+    - side
+  follow_through_elbow_angle_outlier:
+    feature: elbow_angle
+    phase: follow_through
+    direction: two_sided
+    low: 103.08937988281251
+    high: 157.0717987060547
+    buffer_ratio: 0.05
+    min_confidence: 0.6
+    min_valid_frames: 5
+    min_valid_ratio: 0.6
+    compatible_views:
+    - front
+    - side
+kinetic_chain_lags_diagnostic_only:
+  hip_after_knee:
+    low: -0.7066666603088378
+    high: 1.1866666316986092
+    buffer_ratio: 0.05
+  shoulder_after_hip:
+    low: -0.09333329200744628
+    high: 0.8533332824707034
+    buffer_ratio: 0.05
+  elbow_after_shoulder:
+    low: -0.7666667938232421
+    high: 0.6600000381469727
+    buffer_ratio: 0.05
+  wrist_after_elbow:
+    low: -1.0933333158493042
+    high: 0.9266666173934941
+    buffer_ratio: 0.05

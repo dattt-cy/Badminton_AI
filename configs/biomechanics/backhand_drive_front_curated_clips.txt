@@ -1,0 +1,13 @@
+# Front-facing instructional backhand drives.
+001_videoplayback_01.npz
+001_videoplayback_03.npz
+002_backhand_dive2_01.npz
+002_backhand_dive2_02.npz
+002_backhand_dive2_03.npz
+002_backhand_dive2_04.npz
+002_backhand_dive2_05.npz
+002_backhand_dive2_06.npz
+002_backhand_dive2_07.npz
+002_backhand_dive2_08.npz
+004_backhandDrive4_04.npz
+004_backhandDrive4_06.npz

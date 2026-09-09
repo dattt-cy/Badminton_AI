@@ -1,0 +1,219 @@
+version: 1
+techniques:
+  forehand_clear:
+    display_name: Forehand clear
+    minimum_reference_clips: 10
+    pose_dir: data/expert_reference/multisense/forehand_clear
+    views:
+      front:
+        clip_list: configs/biomechanics/forehand_clear_front_curated_clips.txt
+        reference: configs/biomechanics/forehand_clear_front_reference.yaml
+      side:
+        clip_list: configs/biomechanics/forehand_clear_side_curated_clips.txt
+        reference: configs/biomechanics/forehand_clear_side_reference.yaml
+    rules:
+      - name: preparation_arm_position_outlier
+        feature: wrist_shoulder_distance
+        phase: preparation
+        direction: two_sided
+        min_valid_frames: 5
+        compatible_views: [front, side]
+      - name: stance_too_narrow
+        feature: stance_width
+        phase: preparation
+        direction: lower
+        min_valid_frames: 5
+        compatible_views: [front]
+      - name: backswing_elbow_angle_outlier
+        feature: elbow_angle
+        phase: backswing
+        direction: two_sided
+        min_valid_frames: 5
+        compatible_views: [front, side]
+      - name: backswing_wrist_height_outlier
+        feature: wrist_height
+        phase: backswing
+        direction: two_sided
+        min_valid_frames: 5
+        compatible_views: [front, side]
+      - name: excessive_torso_lean_in_forward_swing
+        feature: torso_lean
+        phase: forward_swing
+        direction: upper
+        min_valid_frames: 3
+        compatible_views: [front, side]
+      - name: insufficient_reach
+        feature: wrist_shoulder_distance
+        phase: contact_estimated
+        direction: lower
+        compatible_views: [front, side]
+      - name: arm_not_extended_near_contact
+        feature: elbow_angle
+        phase: contact_estimated
+        direction: lower
+        compatible_views: [front, side]
+      - name: contact_wrist_height_outlier
+        feature: wrist_height
+        phase: contact_estimated
+        direction: two_sided
+        compatible_views: [front, side]
+      - name: limited_follow_through
+        feature: wrist_shoulder_distance
+        phase: follow_through
+        direction: lower
+        compatible_views: [front, side]
+
+  forehand_lift:
+    display_name: Forehand lift
+    minimum_reference_clips: 10
+    pose_dir: data/processed/poses/forehand_lift/single_player
+    views:
+      generic:
+        clip_list: configs/biomechanics/forehand_lift_curated_clips.txt
+        reference: configs/biomechanics/forehand_lift_reference.yaml
+      front:
+        clip_list: configs/biomechanics/forehand_lift_front_curated_clips.txt
+        reference: configs/biomechanics/forehand_lift_front_reference.yaml
+      side:
+        clip_list: configs/biomechanics/forehand_lift_side_curated_clips.txt
+        reference: configs/biomechanics/forehand_lift_side_reference.yaml
+    rules:
+      - name: preparation_arm_position_outlier
+        feature: wrist_shoulder_distance
+        phase: preparation
+        direction: two_sided
+        min_valid_frames: 5
+        compatible_views: [front, side]
+      - name: stance_too_narrow
+        feature: stance_width
+        phase: preparation
+        direction: lower
+        min_valid_frames: 5
+        compatible_views: [front]
+      - name: elbow_too_low_in_backswing
+        feature: elbow_height
+        phase: backswing
+        direction: lower
+        compatible_views: [front, side]
+      - name: backswing_elbow_angle_outlier
+        feature: elbow_angle
+        phase: backswing
+        direction: two_sided
+        min_valid_frames: 5
+        compatible_views: [front, side]
+      - name: backswing_wrist_height_outlier
+        feature: wrist_height
+        phase: backswing
+        direction: two_sided
+        min_valid_frames: 5
+        compatible_views: [front, side]
+      - name: excessive_torso_lean_in_forward_swing
+        feature: torso_lean
+        phase: forward_swing
+        direction: upper
+        min_valid_frames: 3
+        compatible_views: [front, side]
+      - name: insufficient_reach
+        feature: wrist_shoulder_distance
+        phase: contact_estimated
+        direction: lower
+        compatible_views: [front, side]
+      - name: arm_not_extended_near_contact
+        feature: elbow_angle
+        phase: contact_estimated
+        direction: lower
+        compatible_views: [front, side]
+      - name: contact_wrist_height_outlier
+        feature: wrist_height
+        phase: contact_estimated
+        direction: two_sided
+        compatible_views: [front, side]
+      - name: limited_follow_through
+        feature: wrist_shoulder_distance
+        phase: follow_through
+        direction: lower
+        compatible_views: [front, side]
+      - name: follow_through_elbow_angle_outlier
+        feature: elbow_angle
+        phase: follow_through
+        direction: two_sided
+        min_valid_frames: 5
+        compatible_views: [front, side]
+
+  backhand_drive:
+    display_name: Backhand drive
+    minimum_reference_clips: 10
+    pose_dir: data/processed/poses/backhand_drive/single_player
+    views:
+      generic:
+        clip_list: configs/biomechanics/backhand_drive_curated_clips.txt
+        reference: configs/biomechanics/backhand_drive_reference.yaml
+      front:
+        clip_list: configs/biomechanics/backhand_drive_multisense_front_curated_clips.txt
+        reference: configs/biomechanics/backhand_drive_multisense_front_reference.yaml
+      side:
+        clip_list: configs/biomechanics/backhand_drive_multisense_side_curated_clips.txt
+        reference: configs/biomechanics/backhand_drive_multisense_side_reference.yaml
+    rules:
+      - name: elbow_too_close_to_torso
+        feature: elbow_torso_distance
+        phase: backswing
+        direction: lower
+        min_valid_frames: 5
+        compatible_views: [front]
+      - name: preparation_arm_position_outlier
+        feature: wrist_shoulder_distance
+        phase: preparation
+        direction: two_sided
+        min_valid_frames: 5
+        compatible_views: [front, side]
+      - name: stance_too_narrow
+        feature: stance_width
+        phase: preparation
+        direction: lower
+        min_valid_frames: 5
+        compatible_views: [front]
+      - name: backswing_elbow_angle_outlier
+        feature: elbow_angle
+        phase: backswing
+        direction: two_sided
+        min_valid_frames: 5
+        compatible_views: [front, side]
+      - name: backswing_wrist_height_outlier
+        feature: wrist_height
+        phase: backswing
+        direction: two_sided
+        min_valid_frames: 5
+        compatible_views: [front, side]
+      - name: excessive_torso_lean_in_forward_swing
+        feature: torso_lean
+        phase: forward_swing
+        direction: upper
+        min_valid_frames: 3
+        compatible_views: [front, side]
+      - name: insufficient_reach
+        feature: wrist_shoulder_distance
+        phase: contact_estimated
+        direction: lower
+        compatible_views: [front, side]
+      - name: arm_not_extended_near_contact
+        feature: elbow_angle
+        phase: contact_estimated
+        direction: lower
+        compatible_views: [front, side]
+      - name: contact_wrist_height_outlier
+        feature: wrist_height
+        phase: contact_estimated
+        direction: two_sided
+        compatible_views: [front, side]
+      - name: limited_follow_through
+        feature: wrist_shoulder_distance
+        phase: follow_through
+        direction: lower
+        compatible_views: [front, side]
+      - name: follow_through_elbow_angle_outlier
+        feature: elbow_angle
+        phase: follow_through
+        direction: two_sided
+        min_valid_frames: 5
+        compatible_views: [front, side]

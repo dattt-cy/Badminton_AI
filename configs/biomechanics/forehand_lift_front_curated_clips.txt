@@ -1,0 +1,6 @@
+# Front-facing instructional forehand lifts. Kept separate from side-on clips.
+forehand_lift (11).npz
+forehand_lift (21).npz
+forehand_lift (25).npz
+forehand_lift (30).npz
+forehand_lift (35).npz

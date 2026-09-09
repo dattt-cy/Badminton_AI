@@ -1,0 +1,12 @@
+# Visually reviewed instructional/single-stroke clips that also pass the
+# automated pose-stability and phase-quality gates. Multiple sources are kept.
+004_backhandDrive4_06.npz
+004_backhandDrive4_04.npz
+005_backhand_dive5_01.npz
+005_backhand_dive5_03.npz
+002_backhand_dive2_01.npz
+002_backhand_dive2_07.npz
+002_backhand_dive2_03.npz
+001_videoplayback_03.npz
+001_videoplayback_01.npz
+backhand_drive (11).npz

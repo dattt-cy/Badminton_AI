@@ -1,0 +1,20 @@
+# Automatically quality-filtered; pending visual expert review.
+front/Sub11/Sub11_forehand_clear_front_108_pose.npz
+front/Sub11/Sub11_forehand_clear_front_042_pose.npz
+front/Sub11/Sub11_forehand_clear_front_157_pose.npz
+front/Sub11/Sub11_forehand_clear_front_149_pose.npz
+front/Sub19/Sub19_forehand_clear_front_044_pose.npz
+front/Sub19/Sub19_forehand_clear_front_048_pose.npz
+front/Sub20/Sub20_forehand_clear_front_046_pose.npz
+front/Sub20/Sub20_forehand_clear_front_035_pose.npz
+front/Sub20/Sub20_forehand_clear_front_057_pose.npz
+front/Sub20/Sub20_forehand_clear_front_099_pose.npz
+front/Sub20/Sub20_forehand_clear_front_013_pose.npz
+front/Sub20/Sub20_forehand_clear_front_124_pose.npz
+front/Sub20/Sub20_forehand_clear_front_138_pose.npz
+front/Sub20/Sub20_forehand_clear_front_078_pose.npz
+front/Sub24/Sub24_forehand_clear_front_069_pose.npz
+front/Sub24/Sub24_forehand_clear_front_105_pose.npz
+front/Sub24/Sub24_forehand_clear_front_128_pose.npz
+front/Sub24/Sub24_forehand_clear_front_113_pose.npz
+front/Sub24/Sub24_forehand_clear_front_073_pose.npz
