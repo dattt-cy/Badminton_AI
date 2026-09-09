@@ -81,14 +81,19 @@ class YOLOv8PoseEstimator:
         frame_diagonal = float(np.hypot(width, height))
         for result in self.model.predict(**options):
             data = self._keypoint_data(result)
-            if data is None or data.shape[0] == 0:
+            # Some Ultralytics versions return (1, 0, 3), rather than (0, 17, 3),
+            # for an empty detection. Treat either representation as a missing pose.
+            if data is None or data.shape[0] == 0 or data.shape[1] == 0:
                 frames.append(np.zeros((joint_count, 3), dtype=np.float32))
                 missed_frames += 1
                 if missed_frames > self.max_tracking_gap:
                     previous_pose = None
                 continue
 
-            joint_count = data.shape[1]
+            if data.shape[1] != joint_count:
+                raise ValueError(
+                    f'Expected {joint_count} pose joints, got {data.shape[1]}'
+                )
             data = self._filter_target_region(data, width, height)
             if data.shape[0] == 0:
                 frames.append(np.zeros((joint_count, 3), dtype=np.float32))

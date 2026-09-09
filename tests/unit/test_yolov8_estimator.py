@@ -72,6 +72,27 @@ def test_extract_inserts_zero_pose_when_detection_is_missing(
     assert not sequence.keypoints.any()
 
 
+def test_extract_handles_ultralytics_empty_joint_dimension(
+    tmp_path: Path, monkeypatch
+) -> None:
+    video = tmp_path / 'sample.mp4'
+    video.touch()
+    empty = np.empty((1, 0, 3), dtype=np.float32)
+    model = FakeModel([
+        SimpleNamespace(keypoints=SimpleNamespace(data=FakeTensor(empty)))
+    ])
+    monkeypatch.setattr(
+        YOLOv8PoseEstimator,
+        '_read_video_metadata',
+        staticmethod(lambda _: (25.0, 640, 480)),
+    )
+
+    sequence = YOLOv8PoseEstimator(model=model).extract(video)
+
+    assert sequence.keypoints.shape == (1, 17, 3)
+    assert not sequence.keypoints.any()
+
+
 def test_tracking_prefers_nearby_person_over_higher_confidence(
     tmp_path: Path, monkeypatch
 ) -> None:
