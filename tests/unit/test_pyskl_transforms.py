@@ -1,6 +1,9 @@
 import numpy as np
 
-from ai_classifier.action_recognition.pyskl_transforms import BadmintonRandomRot2D
+from ai_classifier.action_recognition.pyskl_transforms import (
+    BadmintonEdgePad,
+    BadmintonRandomRot2D,
+)
 
 
 def test_random_rotation_stays_inside_symmetric_limit(monkeypatch) -> None:
@@ -27,3 +30,24 @@ def test_random_rotation_preserves_confidence_channel(monkeypatch) -> None:
     result = BadmintonRandomRot2D(theta=0.12)({"keypoint": skeleton})
 
     np.testing.assert_array_equal(result["keypoint"], skeleton)
+
+
+def test_edge_pad_repeats_last_pose_and_score() -> None:
+    keypoint = np.arange(1 * 3 * 2 * 2, dtype=np.float32).reshape(1, 3, 2, 2)
+    score = np.arange(1 * 3 * 2, dtype=np.float32).reshape(1, 3, 2)
+    results = {
+        "total_frames": 3,
+        "keypoint": keypoint,
+        "keypoint_score": score,
+    }
+
+    padded = BadmintonEdgePad(min_frames=5)(results)
+
+    assert padded["total_frames"] == 5
+    np.testing.assert_array_equal(padded["keypoint"][:, :3], keypoint)
+    np.testing.assert_array_equal(
+        padded["keypoint"][:, 3:], np.repeat(keypoint[:, -1:], 2, axis=1)
+    )
+    np.testing.assert_array_equal(
+        padded["keypoint_score"][:, 3:], np.repeat(score[:, -1:], 2, axis=1)
+    )

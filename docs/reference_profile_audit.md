@@ -2,8 +2,10 @@
 
 ## Scope
 
-Reviewed the four-frame contact sheets for all 65 `forehand_lift` and 56
-`backhand_drive` single-player videos. A clip is eligible only when pose
+The original audit reviewed the contact sheets for all 65 `forehand_lift` and
+56 legacy `backhand_drive` single-player videos. The active backhand and
+forehand-clear profiles now also include cropped MultiSense expert references
+and visually reviewed Expert/train manual clips. A clip is eligible only when pose
 availability is at least 90%, median body scale is at least 30 px, scale CV is
 at most 0.25, wrist-speed spike ratio is at most 3.0, and detected phases are
 plausible.
@@ -16,10 +18,14 @@ test/reference leakage.
 
 | Technique | Projected view | Samples | Curated list | Reference |
 |---|---|---:|---|---|
-| Forehand lift | side-on | 5 | `forehand_lift_side_curated_clips.txt` | `forehand_lift_side_reference.yaml` |
-| Forehand lift | front | 5 | `forehand_lift_front_curated_clips.txt` | `forehand_lift_front_reference.yaml` |
-| Backhand drive | front | 12 | `backhand_drive_front_curated_clips.txt` | `backhand_drive_front_reference.yaml` |
-| Backhand drive | side/oblique | 6 | `backhand_drive_side_curated_clips.txt` | `backhand_drive_side_reference.yaml` |
+| Forehand lift | generic | 9 | `forehand_lift/forehand_lift_curated_clips.txt` | `forehand_lift/forehand_lift_reference.yaml` |
+| Forehand lift | side-on | 4 | `forehand_lift/forehand_lift_side_curated_clips.txt` | `forehand_lift/forehand_lift_side_reference.yaml` |
+| Forehand lift | front | 4 | `forehand_lift/forehand_lift_front_curated_clips.txt` | `forehand_lift/forehand_lift_front_reference.yaml` |
+| Backhand drive | generic | 5 | `backhand_drive/backhand_drive_curated_clips.txt` | `backhand_drive/backhand_drive_reference.yaml` |
+| Backhand drive | front | 13 | `backhand_drive/backhand_drive_multisense_front_curated_clips.txt` | `backhand_drive/backhand_drive_multisense_front_reference.yaml` |
+| Backhand drive | side/oblique | 21 | `backhand_drive/backhand_drive_combined_side_curated_clips.txt` | `backhand_drive/backhand_drive_combined_side_reference.yaml` |
+| Forehand clear | front | 16 | `forehand_clear/forehand_clear_front_curated_clips.txt` | `forehand_clear/forehand_clear_front_reference.yaml` |
+| Forehand clear | side/oblique | 16 | `forehand_clear/forehand_clear_combined_side_curated_clips.txt` | `forehand_clear/forehand_clear_combined_side_reference.yaml` |
 
 The evaluation CLI selects `front` or `side` automatically from the median
 projected shoulder-width/torso-length ratio. `--view` can override this when
@@ -39,6 +45,17 @@ the automatic projection label is visibly wrong.
 claim that the player's physical balance is unstable. Kinetic-chain timing is
 diagnostic only and remains excluded from MVP error rules.
 
-The forehand view profiles are provisional because each has only five clean,
-homogeneous clips. Add expert-confirmed clips from the same views before using
-them for coaching-grade conclusions.
+All active profiles remain provisional. Sample count alone does not make a
+profile coaching-grade; contact frames and rule outcomes still need independent
+expert validation.
+
+## Runtime evaluation policy
+
+- Short uploads up to five seconds with at most one motion proposal use the
+  full pose sequence so preparation and follow-through are not cut away.
+- Automatic view selection is phase-aware. Ratios below 0.30 use the side
+  profile, ratios above 0.45 use front, and the interval between them is treated
+  as oblique. Oblique phases are only marked as deviations when front and side
+  profiles agree; disagreements are returned for review.
+- `forehand_clear` wrist-height rules are temporarily excluded because the
+  current 2D reference envelopes conflict with visually valid overhead contact.

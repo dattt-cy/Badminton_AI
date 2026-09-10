@@ -1,0 +1,13 @@
+pose_output_root: data/processed/manual_clips_2class_motion_onset_balanced_poses
+annotation_output: data/annotations/manual_clips_2class_motion_onset_val.pkl
+
+classes:
+  backhand_drive: 0
+  forehand_clear: 1
+
+splits: [val]
+
+quality:
+  min_frames: 30
+  min_detected_ratio: 0.80
+  min_mean_confidence: 0.30

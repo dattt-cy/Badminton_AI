@@ -20,6 +20,12 @@ def test_load_project_registry() -> None:
     assert clear.display_name == "Forehand clear"
     assert set(clear.views) == {"front", "side"}
     assert clear.views["front"].reference.name == "forehand_clear_front_reference.yaml"
+    assert clear.views["side"].pose_dir == Path("data")
+
+    backhand = registry.technique("backhand_drive")
+    assert backhand.views["front"].pose_dir == Path(
+        "data/expert_reference/multisense/backhand_drive"
+    )
 
 
 def test_unknown_technique_lists_available_names() -> None:

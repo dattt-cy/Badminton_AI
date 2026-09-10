@@ -1,0 +1,18 @@
+# Existing cropped expert references.
+expert_reference/multisense/forehand_clear/side/Sub11/Sub11_forehand_clear_side_145_pose.npz
+expert_reference/multisense/forehand_clear/side/Sub11/Sub11_forehand_clear_side_142_pose.npz
+expert_reference/multisense/forehand_clear/side/Sub11/Sub11_forehand_clear_side_075_pose.npz
+expert_reference/multisense/forehand_clear/side/Sub11/Sub11_forehand_clear_side_098_pose.npz
+expert_reference/multisense/forehand_clear/side/Sub11/Sub11_forehand_clear_side_090_pose.npz
+expert_reference/multisense/forehand_clear/side/Sub11/Sub11_forehand_clear_side_121_pose.npz
+expert_reference/multisense/forehand_clear/side/Sub11/Sub11_forehand_clear_side_157_pose.npz
+expert_reference/multisense/forehand_clear/side/Sub19/Sub19_forehand_clear_side_004_pose.npz
+expert_reference/multisense/forehand_clear/side/Sub11/Sub11_forehand_clear_side_063_pose.npz
+expert_reference/multisense/forehand_clear/side/Sub24/Sub24_forehand_clear_side_118_pose.npz
+# Visually reviewed Expert/train manual clips.
+processed/manual_clips_2class_poses/train/forehand_clear/side/Sub11/Forehand Clear Side Video-00.05.08.553-00.05.12.577-seg06.npz
+processed/manual_clips_2class_poses/train/forehand_clear/side/Sub19/Forehand Clear Side Video-00.01.39.859-00.01.44.012-seg03.npz
+processed/manual_clips_2class_poses/train/forehand_clear/side/Sub19/Forehand Clear Side Video-00.06.56.310-00.06.59.118-seg18.npz
+processed/manual_clips_2class_poses/train/forehand_clear/side/Sub19/Forehand Clear Side Video-00.07.25.139-00.07.29.196-seg11.npz
+processed/manual_clips_2class_poses/train/forehand_clear/side/Sub19/Forehand Clear Side Video-00.08.33.882-00.08.37.276-seg13.npz
+processed/manual_clips_2class_poses/train/forehand_clear/side/Sub19/Forehand Clear Side Video-00.11.45.948-00.11.50.725-seg17.npz

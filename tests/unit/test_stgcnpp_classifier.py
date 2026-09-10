@@ -162,7 +162,7 @@ def test_predict_aligned_selects_window_around_motion_peak(monkeypatch) -> None:
     assert prediction.padding_end_frames == 0
 
 
-def test_predict_aligned_edge_pads_short_clip(monkeypatch) -> None:
+def test_predict_aligned_pads_away_from_early_motion_peak(monkeypatch) -> None:
     scores = np.zeros(20, dtype=np.float32)
     scores[12] = 1.0
     features = GeometryFeatures(
@@ -194,8 +194,8 @@ def test_predict_aligned_edge_pads_short_clip(monkeypatch) -> None:
     assert prediction.window_start_frame == 0
     assert prediction.window_end_frame == 20
     assert prediction.motion_peak_frame == 12
-    assert prediction.padding_start_frames == 23
-    assert prediction.padding_end_frames == 21
+    assert prediction.padding_start_frames == 0
+    assert prediction.padding_end_frames == 44
 
 
 def test_predict_aligned_window_duration_is_fps_aware(monkeypatch) -> None:

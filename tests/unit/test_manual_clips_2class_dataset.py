@@ -87,3 +87,53 @@ def test_export_keeps_subject_splits_and_filters_bad_poses(tmp_path):
         identifier.startswith("train/")
         for identifier in dataset["split"]["train"]
     )
+
+
+def test_export_combines_original_and_additional_pose_roots(tmp_path):
+    original = tmp_path / "original"
+    augmented = tmp_path / "augmented"
+    for root, stem in ((original, "full"), (augmented, "start_at_swing")):
+        for split, subject in (("train", "Sub08"), ("val", "Sub14")):
+            for action in ("backhand_drive", "forehand_clear"):
+                _write_pose(
+                    root / split / action / "front" / subject / f"{stem}.npz"
+                )
+    output = tmp_path / "combined.pkl"
+    config = {
+        "pose_output_root": str(original),
+        "additional_pose_output_roots": [str(augmented)],
+        "annotation_output": str(output),
+        "classes": {"backhand_drive": 0, "forehand_clear": 1},
+        "splits": ["train", "val"],
+    }
+
+    summary = export_dataset(config)
+
+    assert summary["exported"] == 8
+    assert summary["split_train"] == 4
+    assert summary["split_val"] == 4
+
+
+def test_additional_pose_roots_can_be_limited_to_train(tmp_path):
+    original = tmp_path / "original"
+    augmented = tmp_path / "augmented"
+    for split, subject in (("train", "Sub08"), ("val", "Sub14")):
+        for action in ("backhand_drive", "forehand_clear"):
+            _write_pose(original / split / action / "front" / subject / "full.npz")
+            _write_pose(
+                augmented / split / action / "front" / subject / "partial.npz"
+            )
+    output = tmp_path / "combined.pkl"
+    config = {
+        "pose_output_root": str(original),
+        "additional_pose_output_roots": [str(augmented)],
+        "additional_pose_splits": ["train"],
+        "annotation_output": str(output),
+        "classes": {"backhand_drive": 0, "forehand_clear": 1},
+        "splits": ["train", "val"],
+    }
+
+    summary = export_dataset(config)
+
+    assert summary["split_train"] == 4
+    assert summary["split_val"] == 2

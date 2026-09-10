@@ -1,0 +1,23 @@
+# Existing cropped expert references.
+expert_reference/multisense/backhand_drive/side/Sub11/Sub11_backhand_drive_side_101_pose.npz
+expert_reference/multisense/backhand_drive/side/Sub19/Sub19_backhand_drive_side_048_pose.npz
+expert_reference/multisense/backhand_drive/side/Sub24/Sub24_backhand_drive_side_062_pose.npz
+expert_reference/multisense/backhand_drive/side/Sub11/Sub11_backhand_drive_side_049_pose.npz
+expert_reference/multisense/backhand_drive/side/Sub24/Sub24_backhand_drive_side_103_pose.npz
+expert_reference/multisense/backhand_drive/side/Sub24/Sub24_backhand_drive_side_022_pose.npz
+expert_reference/multisense/backhand_drive/side/Sub24/Sub24_backhand_drive_side_041_pose.npz
+expert_reference/multisense/backhand_drive/side/Sub24/Sub24_backhand_drive_side_031_pose.npz
+expert_reference/multisense/backhand_drive/side/Sub24/Sub24_backhand_drive_side_001_pose.npz
+expert_reference/multisense/backhand_drive/side/Sub24/Sub24_backhand_drive_side_019_pose.npz
+expert_reference/multisense/backhand_drive/side/Sub24/Sub24_backhand_drive_side_012_pose.npz
+# Visually reviewed Expert/train manual clips.
+processed/manual_clips_2class_poses/train/backhand_drive/side/sub11/Backhand Drive Side Video-00.01.56.226-00.01.59.170-seg02.npz
+processed/manual_clips_2class_poses/train/backhand_drive/side/sub11/Backhand Drive Side Video-00.03.15.714-00.03.19.030-seg05.npz
+processed/manual_clips_2class_poses/train/backhand_drive/side/sub11/Backhand Drive Side Video-00.06.40.949-00.06.43.829-seg12.npz
+processed/manual_clips_2class_poses/train/backhand_drive/side/Sub19/Backhand Drive Side Video-00.01.47.725-00.01.51.432-seg03.npz
+processed/manual_clips_2class_poses/train/backhand_drive/side/Sub19/Backhand Drive Side Video-00.02.55.693-00.02.59.622-seg06.npz
+processed/manual_clips_2class_poses/train/backhand_drive/side/Sub19/Backhand Drive Side Video-00.04.39.831-00.04.42.887-seg09.npz
+processed/manual_clips_2class_poses/train/backhand_drive/side/Sub19/Backhand Drive Side Video-00.06.16.202-00.06.19.310-seg13.npz
+processed/manual_clips_2class_poses/train/backhand_drive/side/Sub19/Backhand Drive Side Video-00.07.02.101-00.07.04.901-seg17.npz
+processed/manual_clips_2class_poses/train/backhand_drive/side/Sub19/Backhand Drive Side Video-00.07.56.180-00.08.00.092-seg18.npz
+processed/manual_clips_2class_poses/train/backhand_drive/side/Sub19/Backhand Drive Side Video-00.08.17.810-00.08.21.223-seg19.npz

@@ -25,6 +25,7 @@ class TechniqueRuleSpec:
 class TechniqueView:
     reference: Path
     clip_list: Path | None = None
+    pose_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,7 @@ def load_technique_registry(path: Path) -> TechniqueRegistry:
             view_name: TechniqueView(
                 reference=Path(entry["reference"]),
                 clip_list=Path(entry["clip_list"]) if entry.get("clip_list") else None,
+                pose_dir=Path(entry["pose_dir"]) if entry.get("pose_dir") else None,
             )
             for view_name, entry in raw_views.items()
         }

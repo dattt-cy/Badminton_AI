@@ -142,9 +142,9 @@ class STGCNPPClassifier:
     ) -> ActionPrediction:
         """Find the strongest swing and classify a time-normalized window.
 
-        Missing context at either video boundary is filled by repeating the
-        boundary pose. This prevents PySKL's short-clip sampler from wrapping
-        the end of an action back to its beginning.
+        The window shifts at video boundaries instead of fabricating missing
+        preparation or recovery frames. Clips shorter than the target are
+        padded only on the side away from the detected motion peak.
         """
         if window_seconds <= 0:
             raise ValueError("window_seconds must be positive")
@@ -177,10 +177,20 @@ class STGCNPPClassifier:
             peak_offset = int(round(peak_position * (target_frames - 1)))
             requested_start = peak_frame - peak_offset
         requested_end = requested_start + target_frames
-        start_frame = max(0, requested_start)
-        end_frame = min(source_frames, requested_end)
-        padding_start = max(0, -requested_start)
-        padding_end = max(0, requested_end - source_frames)
+        if requested_start < 0:
+            start_frame = 0
+            end_frame = min(source_frames, target_frames)
+            padding_start = 0
+            padding_end = max(0, target_frames - source_frames)
+        elif requested_end > source_frames:
+            end_frame = source_frames
+            start_frame = max(0, source_frames - target_frames)
+            padding_start = max(0, target_frames - source_frames)
+            padding_end = 0
+        else:
+            start_frame = requested_start
+            end_frame = requested_end
+            padding_start = padding_end = 0
         keypoints = np.asarray(sequence.keypoints)[start_frame:end_frame]
         if padding_start or padding_end:
             keypoints = np.pad(

@@ -3,9 +3,10 @@
 Usage:
     python scripts/evaluation/check_technique_rules.py <pose.npz> <technique> [--handedness right]
 
-If the input is a single clean stroke clip, pass --no-segment to skip
-Motion Proposal and process the entire clip directly (useful for comparing
-against the reference-build workflow).
+Short clips up to five seconds with at most one motion proposal are treated as
+one complete stroke automatically. Use --segmentation-mode multi for long or
+multi-stroke processing; --no-segment remains as a compatibility alias for
+--segmentation-mode single.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from ai_classifier.biomechanics import (
 from ai_classifier.error_detection import (
     RangeCheck,
     RuleDefinition,
+    RuleResult,
     evaluate_rule_definitions,
 )
 from ai_classifier.pose import PoseSequence
@@ -78,7 +80,22 @@ def load_rule_definitions(path: Path) -> list[RuleDefinition]:
     ]
 
 
-def estimate_view(sequence: PoseSequence) -> str:
+SIDE_VIEW_MAX_RATIO = 0.30
+FRONT_VIEW_MIN_RATIO = 0.45
+SINGLE_STROKE_MAX_SECONDS = 5.0
+PHASE_NAMES = (
+    "preparation",
+    "backswing",
+    "forward_swing",
+    "contact_estimated",
+    "follow_through",
+)
+
+
+def estimate_view_with_ratio(
+    sequence: PoseSequence,
+    frame_range: tuple[int, int] | None = None,
+) -> tuple[str, float | None]:
     """Estimate front versus side-on geometry from shoulder/torso projection.
 
     This describes the observable 2D body orientation, which is what matters
@@ -86,6 +103,11 @@ def estimate_view(sequence: PoseSequence) -> str:
     estimator.
     """
     keypoints = np.asarray(sequence.keypoints, dtype=np.float32)
+    if frame_range is not None:
+        start, end = frame_range
+        keypoints = keypoints[start:end]
+    if not len(keypoints):
+        return "unknown", None
     shoulder_width = np.linalg.norm(keypoints[:, 5, :2] - keypoints[:, 6, :2], axis=1)
     mid_shoulder = (keypoints[:, 5, :2] + keypoints[:, 6, :2]) / 2
     mid_hip = (keypoints[:, 11, :2] + keypoints[:, 12, :2]) / 2
@@ -93,19 +115,150 @@ def estimate_view(sequence: PoseSequence) -> str:
     confidence = np.min(keypoints[:, [5, 6, 11, 12], 2], axis=1)
     valid = (confidence >= 0.3) & (torso_length > 1e-6)
     if not valid.any():
-        return "front"
+        return "unknown", None
     projected_ratio = float(np.median(shoulder_width[valid] / torso_length[valid]))
-    return "side" if projected_ratio < 0.35 else "front"
+    if projected_ratio < SIDE_VIEW_MAX_RATIO:
+        return "side", projected_ratio
+    if projected_ratio > FRONT_VIEW_MIN_RATIO:
+        return "front", projected_ratio
+    return "oblique", projected_ratio
+
+
+def estimate_view(sequence: PoseSequence) -> str:
+    """Backward-compatible two-way view estimate for callers that require it."""
+    view, ratio = estimate_view_with_ratio(sequence)
+    if view in {"front", "side"}:
+        return view
+    if ratio is None:
+        return "front"
+    return "side" if ratio < 0.35 else "front"
+
+
+def estimate_phase_views(sequence: PoseSequence, phases: object) -> dict[str, dict]:
+    """Return projected orientation and ratio independently for every phase."""
+    output = {}
+    for phase_name in PHASE_NAMES:
+        view, ratio = estimate_view_with_ratio(sequence, getattr(phases, phase_name))
+        output[phase_name] = {"view": view, "projected_ratio": ratio}
+    return output
+
+
+def should_use_full_sequence(
+    sequence: PoseSequence,
+    merged_proposal_count: int,
+    *,
+    max_seconds: float = SINGLE_STROKE_MAX_SECONDS,
+) -> bool:
+    """Treat short uploads with at most one stroke proposal as pre-trimmed."""
+    duration = len(sequence.keypoints) / sequence.fps if sequence.fps > 0 else float("inf")
+    return duration <= max_seconds and merged_proposal_count <= 1
+
+
+def _combine_oblique_results(
+    front: RuleResult,
+    side: RuleResult,
+) -> RuleResult:
+    """Require front/side agreement before making an oblique-view assertion."""
+    if front.status == side.status:
+        return front
+    usable = [item for item in (front, side) if item.status != "insufficient_data"]
+    observed = next((item.observed for item in usable if item.observed is not None), None)
+    valid_frames = max((item.valid_frames for item in usable), default=0)
+    return RuleResult(
+        front.rule_name,
+        "review" if usable else "insufficient_data",
+        observed,
+        front.reference_low,
+        front.reference_high,
+        valid_frames,
+        reason="view_disagreement" if usable else "insufficient_view_data",
+    )
+
+
+def evaluate_rules_by_phase_view(
+    features: object,
+    phases: object,
+    sequence: PoseSequence,
+    rules_by_view: dict[str, list[RuleDefinition]],
+) -> tuple[list[RuleResult], list[dict], dict[str, dict]]:
+    """Evaluate each phase against front, side, or both reference profiles."""
+    phase_views = estimate_phase_views(sequence, phases)
+    ordered_names = [rule.name for rule in rules_by_view["front"]]
+    lookup = {
+        view: {rule.name: rule for rule in rules}
+        for view, rules in rules_by_view.items()
+    }
+    results: list[RuleResult] = []
+    contexts: list[dict] = []
+    for name in ordered_names:
+        front_rule = lookup["front"][name]
+        phase_view = phase_views[front_rule.phase]["view"]
+        available = [
+            view for view in ("front", "side")
+            if name in lookup[view] and view in lookup[view][name].compatible_views
+        ]
+        if phase_view in {"front", "side"}:
+            chosen = phase_view if phase_view in available else None
+            if chosen is None:
+                rule = front_rule
+                result = evaluate_rule_definitions(features, phases, [rule], view=phase_view)[0]
+                contexts.append({"phase_view": phase_view, "evaluated_views": [], "rules": {}})
+            else:
+                rule = lookup[chosen][name]
+                result = evaluate_rule_definitions(features, phases, [rule], view=chosen)[0]
+                contexts.append({
+                    "phase_view": phase_view,
+                    "evaluated_views": [chosen],
+                    "rules": {chosen: rule},
+                })
+        elif phase_view == "oblique" and len(available) == 2:
+            front_result = evaluate_rule_definitions(
+                features, phases, [lookup["front"][name]], view="front"
+            )[0]
+            side_result = evaluate_rule_definitions(
+                features, phases, [lookup["side"][name]], view="side"
+            )[0]
+            result = _combine_oblique_results(front_result, side_result)
+            rule = front_rule
+            contexts.append({
+                "phase_view": "oblique",
+                "evaluated_views": ["front", "side"],
+                "rules": {
+                    "front": lookup["front"][name],
+                    "side": lookup["side"][name],
+                },
+            })
+        elif available:
+            chosen = available[0]
+            rule = lookup[chosen][name]
+            result = evaluate_rule_definitions(features, phases, [rule], view=chosen)[0]
+            if phase_view in {"oblique", "unknown"} and result.status != "insufficient_data":
+                result = RuleResult(
+                    result.rule_name, "review", result.observed,
+                    result.reference_low, result.reference_high,
+                    result.valid_frames, reason="single_view_evidence",
+                )
+            contexts.append({
+                "phase_view": phase_view,
+                "evaluated_views": [chosen],
+                "rules": {chosen: rule},
+            })
+        else:
+            rule = front_rule
+            result = evaluate_rule_definitions(features, phases, [rule], view="side")[0]
+            contexts.append({"phase_view": phase_view, "evaluated_views": [], "rules": {}})
+        results.append(result)
+    return results, contexts, phase_views
 
 
 def analyse_clip(
     sequence: PoseSequence,
     technique: str,
-    rules: list[RuleDefinition],
+    rules_by_view: dict[str, list[RuleDefinition]],
     handedness: str,
     label: str,
     view: str,
-) -> tuple[object, list]:
+) -> tuple[object, list[RuleResult], list[dict], dict[str, dict]]:
     """Run phase detection + rule checks on one clean stroke clip."""
     features = extract_geometry_features(sequence, handedness=handedness)
     phases = detect_stroke_phases(features)
@@ -119,17 +272,37 @@ def analyse_clip(
     )
     if not phases.valid:
         print(f"  {label}: Insufficient data: implausible or incomplete stroke phases.")
-    results = evaluate_rule_definitions(features, phases, rules, view=view)
-    for result, rule in zip(results, rules):
+    if view == "phase-aware":
+        results, contexts, phase_views = evaluate_rules_by_phase_view(
+            features, phases, sequence, rules_by_view
+        )
+        rendered_views = ", ".join(
+            f"{name}={entry['view']}"
+            + (
+                f"({entry['projected_ratio']:.3f})"
+                if entry["projected_ratio"] is not None else ""
+            )
+            for name, entry in phase_views.items()
+        )
+        print(f"  phase_views: {rendered_views}")
+    else:
+        rules = rules_by_view[view]
+        results = evaluate_rule_definitions(features, phases, rules, view=view)
+        contexts = [
+            {"phase_view": view, "evaluated_views": [view], "rules": {view: rule}}
+            for rule in rules
+        ]
+        phase_views = {name: {"view": view, "projected_ratio": None} for name in PHASE_NAMES}
+    for result, context in zip(results, contexts):
         observed = "n/a" if result.observed is None else f"{result.observed:.3f}"
         reason = f" reason={result.reason}" if result.reason else ""
-        accepted = _accepted_condition(rule)
+        accepted = _accepted_conditions(context)
         print(
             f"  {label}: [{result.status}] {result.rule_name}: observed={observed} "
             f"accepted {accepted} "
             f"valid_frames={result.valid_frames}{reason}"
         )
-    return phases, results
+    return phases, results, contexts, phase_views
 
 
 def main() -> None:
@@ -148,6 +321,13 @@ def main() -> None:
     )
     parser.add_argument("--output", type=Path, help="Optional structured JSON report")
     parser.add_argument(
+        "--segmentation-mode",
+        choices=("auto", "single", "multi"),
+        default="auto",
+        help="Auto uses the full sequence for clips up to 5 seconds with at most "
+             "one proposal; single always uses the full clip; multi always segments.",
+    )
+    parser.add_argument(
         "--no-segment",
         action="store_true",
         help="Skip Motion Proposal; treat the entire clip as one stroke (for "
@@ -158,68 +338,98 @@ def main() -> None:
     registry = load_technique_registry(args.registry)
     technique = registry.technique(args.technique)
     sequence = load_pose(args.input)
-    selected_view = estimate_view(sequence) if args.view == "auto" else args.view
-    if selected_view not in technique.views:
+    phase_aware = args.view == "auto" and {"front", "side"} <= set(technique.views)
+    selected_view = "phase-aware" if phase_aware else (
+        estimate_view(sequence) if args.view == "auto" else args.view
+    )
+    requested_views = ("front", "side") if phase_aware else (selected_view,)
+    missing_views = [view for view in requested_views if view not in technique.views]
+    if missing_views:
         available = ", ".join(sorted(technique.views))
         raise ValueError(
-            f"Technique '{args.technique}' has no '{selected_view}' view; available: {available}"
+            f"Technique '{args.technique}' has no '{missing_views[0]}' view; available: {available}"
         )
-    reference_path = technique.views[selected_view].reference
-    if not reference_path.exists():
-        print(f"Reference profile not found: {reference_path}", file=sys.stderr)
-        print(
-            f"Run: python scripts/data/build_reference_profiles.py {args.technique} "
-            f"--view {selected_view}", file=sys.stderr,
+    reference_paths = {
+        view: technique.views[view].reference for view in requested_views
+    }
+    reference_documents = {}
+    rules_by_view = {}
+    for view, reference_path in reference_paths.items():
+        if not reference_path.exists():
+            print(f"Reference profile not found: {reference_path}", file=sys.stderr)
+            print(
+                f"Run: python scripts/data/build_reference_profiles.py {args.technique} "
+                f"--view {view}", file=sys.stderr,
+            )
+            sys.exit(1)
+        reference_documents[view] = yaml.safe_load(
+            reference_path.read_text(encoding="utf-8")
         )
-        sys.exit(1)
-
-    reference_document = yaml.safe_load(reference_path.read_text(encoding="utf-8"))
-    reference_status = reference_document.get("reference_status", "provisional")
-    reference_sample_count = int(reference_document.get("sample_count", 0))
-    rules = load_rule_definitions(reference_path)
+        rules_by_view[view] = load_rule_definitions(reference_path)
+    reference_status = (
+        "ready"
+        if all(doc.get("reference_status") == "ready" for doc in reference_documents.values())
+        else "provisional"
+    )
+    reference_sample_counts = {
+        view: int(doc.get("sample_count", 0))
+        for view, doc in reference_documents.items()
+    }
 
     print(f"clip: {args.input.name}  frames={len(sequence.keypoints)}"
           f"  fps={sequence.fps:.1f}  technique={args.technique}  view={selected_view}"
-          f"  reference={reference_path.name}")
+          f"  references={','.join(path.name for path in reference_paths.values())}")
     print(
-        f"Reference status: {reference_status}  samples={reference_sample_count}/"
+        f"Reference status: {reference_status}  samples={reference_sample_counts}/"
         f"{technique.minimum_reference_clips} required"
     )
     report = {
         "input": str(args.input),
         "technique": args.technique,
         "view": selected_view,
-        "reference": str(reference_path),
+        "references": {view: str(path) for view, path in reference_paths.items()},
         "reference_status": reference_status,
-        "reference_sample_count": reference_sample_count,
+        "reference_sample_counts": reference_sample_counts,
         "minimum_reference_clips": technique.minimum_reference_clips,
         "frame_count": len(sequence.keypoints),
         "fps": sequence.fps,
         "strokes": [],
     }
 
-    if args.no_segment:
+    features_full = extract_geometry_features(sequence, handedness=args.handedness)
+    proposals = find_motion_proposals(features_full, fps=sequence.fps)
+    raw_proposal_count = len(proposals)
+    proposals = merge_motion_proposals(proposals, features_full, fps=sequence.fps)
+    segmentation_mode = "single" if args.no_segment else args.segmentation_mode
+    use_full_sequence = segmentation_mode == "single" or (
+        segmentation_mode == "auto"
+        and should_use_full_sequence(sequence, len(proposals))
+    )
+    report["segmentation_mode"] = segmentation_mode
+    report["raw_motion_proposals"] = raw_proposal_count
+    report["merged_strokes"] = len(proposals)
+
+    if use_full_sequence:
         # Treat the entire sequence as one pre-trimmed stroke.
-        print("Mode: no-segment (treating full clip as one stroke)")
-        phases, results = analyse_clip(
-            sequence, args.technique, rules, args.handedness, "stroke-1", selected_view
+        mode_reason = "explicit" if segmentation_mode == "single" else "auto short-single-stroke"
+        print(f"Mode: full sequence ({mode_reason})")
+        phases, results, contexts, phase_views = analyse_clip(
+            sequence, args.technique, rules_by_view, args.handedness,
+            "stroke-1", selected_view
         )
         report["strokes"].append({
             "stroke_id": 1,
             "start_frame": 0,
             "end_frame": len(sequence.keypoints) - 1,
             "phases": asdict(phases),
-            "rules": _serialize_results(results, rules),
+            "phase_views": phase_views,
+            "rules": _serialize_results(results, contexts),
             "geometry_assessment": _overall_assessment(results, reference_status),
         })
         _write_report(args.output, report)
         return
 
     # --- Full pipeline: Motion Proposal → Boundary Refinement → Rule check ---
-    features_full = extract_geometry_features(sequence, handedness=args.handedness)
-    proposals = find_motion_proposals(features_full, fps=sequence.fps)
-    raw_proposal_count = len(proposals)
-    proposals = merge_motion_proposals(proposals, features_full, fps=sequence.fps)
     print(f"Motion proposals found: {raw_proposal_count}; after merge: {len(proposals)}")
 
     if not proposals:
@@ -236,8 +446,8 @@ def main() -> None:
             f"duration={( stroke.end_frame - stroke.start_frame) / sequence.fps:.2f}s"
         )
         clip_seq = stroke.clip(sequence)
-        phases, results = analyse_clip(
-            clip_seq, args.technique, rules, args.handedness, label, selected_view
+        phases, results, contexts, phase_views = analyse_clip(
+            clip_seq, args.technique, rules_by_view, args.handedness, label, selected_view
         )
         report["strokes"].append({
             "stroke_id": i,
@@ -250,10 +460,10 @@ def main() -> None:
             ],
             "source_proposals": stroke.proposal.source_count,
             "phases": asdict(phases),
-            "rules": _serialize_results(results, rules),
+            "phase_views": phase_views,
+            "rules": _serialize_results(results, contexts),
             "geometry_assessment": _overall_assessment(results, reference_status),
         })
-    report["raw_motion_proposals"] = raw_proposal_count
     report["merged_strokes"] = len(strokes)
     _write_report(args.output, report)
 
@@ -274,12 +484,27 @@ def _accepted_condition(rule: RuleDefinition) -> str:
     return f"[{rule.reference.low:.3f}, {rule.reference.high:.3f}]"
 
 
-def _serialize_results(results: list, rules: list[RuleDefinition]) -> list[dict]:
+def _accepted_conditions(context: dict) -> str:
+    rules = context["rules"]
+    if not rules:
+        return "n/a"
+    rendered = [
+        f"{view}:{_accepted_condition(rule)}"
+        for view, rule in rules.items()
+    ]
+    return "; ".join(rendered)
+
+
+def _serialize_results(results: list, contexts: list[dict]) -> list[dict]:
     output = []
-    for result, rule in zip(results, rules):
+    for result, context in zip(results, contexts):
         item = asdict(result)
-        item["direction"] = rule.direction
-        item["accepted_condition"] = _accepted_condition(rule)
+        item["phase_view"] = context["phase_view"]
+        item["evaluated_views"] = context["evaluated_views"]
+        item["accepted_conditions"] = {
+            view: _accepted_condition(rule)
+            for view, rule in context["rules"].items()
+        }
         output.append(item)
     return output
 

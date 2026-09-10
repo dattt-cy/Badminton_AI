@@ -70,7 +70,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        help="Output YAML path (default: configs/biomechanics/<technique>_reference.yaml)",
+        help="Output YAML path (default: the selected view's reference path in the registry)",
     )
     parser.add_argument(
         "--pending-review", action="store_true",
@@ -96,13 +96,17 @@ def main() -> None:
     if args.view not in technique.views:
         raise ValueError(f"Technique '{args.technique}' has no '{args.view}' view")
     view_config = technique.views[args.view]
-    pose_dir = args.pose_dir or technique.pose_dir
+    pose_dir = args.pose_dir or view_config.pose_dir or technique.pose_dir
     output_path = args.output or view_config.reference
     clip_list = args.clip_list or view_config.clip_list
     if not pose_dir.is_dir():
         raise FileNotFoundError(f"Pose directory not found: {pose_dir}")
 
-    clip_paths = sorted(pose_dir.rglob("*_pose.npz"))
+    # Reference poses produced by the legacy extractor use ``*_pose.npz``,
+    # while the manual-clips pipeline preserves the video stem and therefore
+    # writes plain ``*.npz`` files.  Accept both naming conventions; an
+    # optional curated list still limits the actual reference candidates.
+    clip_paths = sorted(pose_dir.rglob("*.npz"))
     if not clip_paths:
         raise FileNotFoundError(f"No .npz pose files found in {pose_dir}")
 

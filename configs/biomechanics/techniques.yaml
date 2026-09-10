@@ -6,11 +6,12 @@ techniques:
     pose_dir: data/expert_reference/multisense/forehand_clear
     views:
       front:
-        clip_list: configs/biomechanics/forehand_clear_front_curated_clips.txt
-        reference: configs/biomechanics/forehand_clear_front_reference.yaml
+        clip_list: configs/biomechanics/forehand_clear/forehand_clear_front_curated_clips.txt
+        reference: configs/biomechanics/forehand_clear/forehand_clear_front_reference.yaml
       side:
-        clip_list: configs/biomechanics/forehand_clear_side_curated_clips.txt
-        reference: configs/biomechanics/forehand_clear_side_reference.yaml
+        pose_dir: data
+        clip_list: configs/biomechanics/forehand_clear/forehand_clear_combined_side_curated_clips.txt
+        reference: configs/biomechanics/forehand_clear/forehand_clear_combined_side_reference.yaml
     rules:
       - name: preparation_arm_position_outlier
         feature: wrist_shoulder_distance
@@ -26,12 +27,6 @@ techniques:
         compatible_views: [front]
       - name: backswing_elbow_angle_outlier
         feature: elbow_angle
-        phase: backswing
-        direction: two_sided
-        min_valid_frames: 5
-        compatible_views: [front, side]
-      - name: backswing_wrist_height_outlier
-        feature: wrist_height
         phase: backswing
         direction: two_sided
         min_valid_frames: 5
@@ -52,11 +47,6 @@ techniques:
         phase: contact_estimated
         direction: lower
         compatible_views: [front, side]
-      - name: contact_wrist_height_outlier
-        feature: wrist_height
-        phase: contact_estimated
-        direction: two_sided
-        compatible_views: [front, side]
       - name: limited_follow_through
         feature: wrist_shoulder_distance
         phase: follow_through
@@ -69,14 +59,14 @@ techniques:
     pose_dir: data/processed/poses/forehand_lift/single_player
     views:
       generic:
-        clip_list: configs/biomechanics/forehand_lift_curated_clips.txt
-        reference: configs/biomechanics/forehand_lift_reference.yaml
+        clip_list: configs/biomechanics/forehand_lift/forehand_lift_curated_clips.txt
+        reference: configs/biomechanics/forehand_lift/forehand_lift_reference.yaml
       front:
-        clip_list: configs/biomechanics/forehand_lift_front_curated_clips.txt
-        reference: configs/biomechanics/forehand_lift_front_reference.yaml
+        clip_list: configs/biomechanics/forehand_lift/forehand_lift_front_curated_clips.txt
+        reference: configs/biomechanics/forehand_lift/forehand_lift_front_reference.yaml
       side:
-        clip_list: configs/biomechanics/forehand_lift_side_curated_clips.txt
-        reference: configs/biomechanics/forehand_lift_side_reference.yaml
+        clip_list: configs/biomechanics/forehand_lift/forehand_lift_side_curated_clips.txt
+        reference: configs/biomechanics/forehand_lift/forehand_lift_side_reference.yaml
     rules:
       - name: preparation_arm_position_outlier
         feature: wrist_shoulder_distance
@@ -146,14 +136,16 @@ techniques:
     pose_dir: data/processed/poses/backhand_drive/single_player
     views:
       generic:
-        clip_list: configs/biomechanics/backhand_drive_curated_clips.txt
-        reference: configs/biomechanics/backhand_drive_reference.yaml
+        clip_list: configs/biomechanics/backhand_drive/backhand_drive_curated_clips.txt
+        reference: configs/biomechanics/backhand_drive/backhand_drive_reference.yaml
       front:
-        clip_list: configs/biomechanics/backhand_drive_multisense_front_curated_clips.txt
-        reference: configs/biomechanics/backhand_drive_multisense_front_reference.yaml
+        pose_dir: data/expert_reference/multisense/backhand_drive
+        clip_list: configs/biomechanics/backhand_drive/backhand_drive_multisense_front_curated_clips.txt
+        reference: configs/biomechanics/backhand_drive/backhand_drive_multisense_front_reference.yaml
       side:
-        clip_list: configs/biomechanics/backhand_drive_multisense_side_curated_clips.txt
-        reference: configs/biomechanics/backhand_drive_multisense_side_reference.yaml
+        pose_dir: data
+        clip_list: configs/biomechanics/backhand_drive/backhand_drive_combined_side_curated_clips.txt
+        reference: configs/biomechanics/backhand_drive/backhand_drive_combined_side_reference.yaml
     rules:
       - name: elbow_too_close_to_torso
         feature: elbow_torso_distance
