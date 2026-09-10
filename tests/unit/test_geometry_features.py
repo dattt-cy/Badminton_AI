@@ -264,3 +264,33 @@ def test_geometry_quality_scale_is_not_destabilized_by_shoulder_rotation() -> No
     quality = assess_geometry_quality(PoseSequence(keypoints, 30, 200, 300))
 
     assert quality.scale_cv == pytest.approx(0.0)
+
+
+def test_floor_angle_correction_removes_camera_roll_from_vertical_features() -> None:
+    keypoints = np.zeros((3, 17, 3), dtype=np.float32)
+    keypoints[..., 2] = 0.9
+    keypoints[:, 5, :2] = [-1.0, 0.0]
+    keypoints[:, 6, :2] = [1.0, 0.0]
+    keypoints[:, 8, :2] = [1.0, 1.0]
+    keypoints[:, 10, :2] = [2.0, 1.0]
+    keypoints[:, 11, :2] = [-1.0, 2.0]
+    keypoints[:, 12, :2] = [1.0, 2.0]
+    keypoints[:, 14, :2] = [1.0, 3.0]
+    keypoints[:, 15, :2] = [-1.0, 4.0]
+    keypoints[:, 16, :2] = [1.0, 4.0]
+
+    angle = 12.0
+    radians = np.deg2rad(angle)
+    rotation = np.array(
+        [[np.cos(radians), -np.sin(radians)],
+         [np.sin(radians), np.cos(radians)]],
+        dtype=np.float32,
+    )
+    keypoints[..., :2] = keypoints[..., :2] @ rotation.T
+    sequence = PoseSequence(keypoints, 30, 100, 100)
+
+    uncorrected = extract_geometry_features(sequence)
+    corrected = extract_geometry_features(sequence, floor_angle_degrees=angle)
+
+    assert uncorrected.column("torso_lean")[1] == pytest.approx(angle, abs=0.01)
+    assert corrected.column("torso_lean")[1] == pytest.approx(0.0, abs=0.01)

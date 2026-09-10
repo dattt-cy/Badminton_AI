@@ -281,18 +281,28 @@ def extract_geometry_features(
     *,
     handedness: str = "right",
     min_confidence: float = 0.3,
+    floor_angle_degrees: float = 0.0,
 ) -> GeometryFeatures:
-    """Extract scale-normalized geometry and motion for the racket arm."""
+    """Extract scale-normalized geometry and motion for the racket arm.
+
+    ``floor_angle_degrees`` is the observed image-space slope of a horizontal
+    court/floor line (positive when it slopes downward to the right). Coordinates
+    are levelled before vertical and torso-orientation features are calculated.
+    Joint angles and Euclidean distances are rotation-invariant.
+    """
     if handedness not in {"left", "right"}:
         raise ValueError("handedness must be left or right")
     if not 0.0 <= min_confidence <= 1.0:
         raise ValueError("min_confidence must be between 0 and 1")
+    if not np.isfinite(floor_angle_degrees):
+        raise ValueError("floor_angle_degrees must be finite")
 
     keypoints = np.asarray(sequence.keypoints, dtype=np.float32)
     if keypoints.ndim != 3 or keypoints.shape[1:] != (17, 3):
         raise ValueError(f"Expected keypoints with shape (T, 17, 3), got {keypoints.shape}")
     if sequence.fps <= 0:
         raise ValueError("fps must be positive")
+    keypoints = _level_keypoints(keypoints, floor_angle_degrees)
 
     shoulder = RIGHT_SHOULDER if handedness == "right" else LEFT_SHOULDER
     elbow = RIGHT_ELBOW if handedness == "right" else LEFT_ELBOW
@@ -443,10 +453,14 @@ def assess_geometry_quality(
     *,
     handedness: str = "right",
     min_confidence: float = 0.3,
+    floor_angle_degrees: float = 0.0,
 ) -> GeometryQuality:
     """Measure trajectory stability, not merely keypoint availability."""
     features = extract_geometry_features(
-        sequence, handedness=handedness, min_confidence=min_confidence
+        sequence,
+        handedness=handedness,
+        min_confidence=min_confidence,
+        floor_angle_degrees=floor_angle_degrees,
     )
     keypoints = np.asarray(sequence.keypoints, dtype=np.float32)
     raw_scale, _ = _body_scale(keypoints, min_confidence)
@@ -476,6 +490,23 @@ def assess_geometry_quality(
         speed_spike_ratio=spike_ratio,
         phases_valid=detect_stroke_phases(features).valid,
     )
+
+
+def _level_keypoints(
+    keypoints: NDArray[np.float32], floor_angle_degrees: float
+) -> NDArray[np.float32]:
+    """Rotate image XY so the supplied court/floor line becomes horizontal."""
+    if abs(floor_angle_degrees) < 1e-9:
+        return keypoints
+    radians = np.deg2rad(floor_angle_degrees)
+    cosine = np.float32(np.cos(radians))
+    sine = np.float32(np.sin(radians))
+    output = keypoints.copy()
+    x = keypoints[..., 0]
+    y = keypoints[..., 1]
+    output[..., 0] = cosine * x + sine * y
+    output[..., 1] = -sine * x + cosine * y
+    return output
 
 
 def _joint_angle(

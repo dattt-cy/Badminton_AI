@@ -46,6 +46,10 @@ def parse_args() -> argparse.Namespace:
         "(default: data/processed/poses/<technique>/single_player)",
     )
     parser.add_argument("--handedness", choices=("left", "right"), default="right")
+    parser.add_argument(
+        "--floor-angle-degrees", type=float, default=0.0,
+        help="Observed slope of a horizontal court line, positive downward to the right.",
+    )
     parser.add_argument("--buffer-ratio", type=float, default=0.05)
     parser.add_argument(
         "--min-scale-px",
@@ -140,7 +144,10 @@ def main() -> None:
     eligible = []
     quality_by_path = {}
     for item in loaded:
-        quality = assess_geometry_quality(item[1], handedness=args.handedness)
+        quality = assess_geometry_quality(
+            item[1], handedness=args.handedness,
+            floor_angle_degrees=args.floor_angle_degrees,
+        )
         quality_by_path[item[0]] = quality
         if quality.suitable_for_reference and item[2] >= args.min_scale_px:
             eligible.append(item)
@@ -166,7 +173,10 @@ def main() -> None:
     phase_valid_count = 0
     clips_used: list[str] = []
     for clip_path, sequence, scale_px in selected:
-        features = extract_geometry_features(sequence, handedness=args.handedness)
+        features = extract_geometry_features(
+            sequence, handedness=args.handedness,
+            floor_angle_degrees=args.floor_angle_degrees,
+        )
         phases = detect_stroke_phases(features)
         timing = extract_kinetic_chain_timing(features)
         timings.append(timing)
@@ -216,6 +226,7 @@ def main() -> None:
         "view": args.view,
         "registry": str(args.registry),
         "handedness": args.handedness,
+        "floor_angle_degrees": args.floor_angle_degrees,
         "sample_count": phase_valid_count,
         "minimum_reference_clips": technique.minimum_reference_clips,
         "reference_status": (

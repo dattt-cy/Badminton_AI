@@ -17,6 +17,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path, help="Pose .npz produced by this project")
     parser.add_argument("--handedness", choices=("left", "right"), default="right")
+    parser.add_argument(
+        "--floor-angle-degrees", type=float, default=0.0,
+        help="Observed slope of a horizontal court line, positive downward to the right.",
+    )
     parser.add_argument("--output", type=Path, help="Optional JSON output")
     args = parser.parse_args()
 
@@ -27,8 +31,14 @@ def main() -> None:
             int(data["frame_width"]),
             int(data["frame_height"]),
         )
-    features = extract_geometry_features(sequence, handedness=args.handedness)
-    quality = assess_geometry_quality(sequence, handedness=args.handedness)
+    features = extract_geometry_features(
+        sequence, handedness=args.handedness,
+        floor_angle_degrees=args.floor_angle_degrees,
+    )
+    quality = assess_geometry_quality(
+        sequence, handedness=args.handedness,
+        floor_angle_degrees=args.floor_angle_degrees,
+    )
     proposals = find_motion_proposals(features, fps=sequence.fps)
 
     feature_quality = {
@@ -57,6 +67,7 @@ def main() -> None:
         "fps": sequence.fps,
         "duration_seconds": len(sequence.keypoints) / sequence.fps,
         "handedness": args.handedness,
+        "floor_angle_degrees": args.floor_angle_degrees,
         "geometry_feasible": not reasons,
         "reasons": reasons,
         "feature_valid_ratio": feature_quality,

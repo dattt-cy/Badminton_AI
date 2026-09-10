@@ -258,9 +258,14 @@ def analyse_clip(
     handedness: str,
     label: str,
     view: str,
+    floor_angle_degrees: float = 0.0,
 ) -> tuple[object, list[RuleResult], list[dict], dict[str, dict]]:
     """Run phase detection + rule checks on one clean stroke clip."""
-    features = extract_geometry_features(sequence, handedness=handedness)
+    features = extract_geometry_features(
+        sequence,
+        handedness=handedness,
+        floor_angle_degrees=floor_angle_degrees,
+    )
     phases = detect_stroke_phases(features)
     print(
         f"  phases_valid={phases.valid}  "
@@ -315,6 +320,10 @@ def main() -> None:
     parser.add_argument("--registry", type=Path,
                         default=Path("configs/biomechanics/techniques.yaml"))
     parser.add_argument("--handedness", choices=("left", "right"), default="right")
+    parser.add_argument(
+        "--floor-angle-degrees", type=float, default=0.0,
+        help="Observed slope of a horizontal court line, positive downward to the right.",
+    )
     parser.add_argument(
         "--view", choices=("auto", "front", "side", "generic"), default="auto",
         help="Reference geometry to use. Auto selects from projected body orientation.",
@@ -393,10 +402,15 @@ def main() -> None:
         "minimum_reference_clips": technique.minimum_reference_clips,
         "frame_count": len(sequence.keypoints),
         "fps": sequence.fps,
+        "floor_angle_degrees": args.floor_angle_degrees,
         "strokes": [],
     }
 
-    features_full = extract_geometry_features(sequence, handedness=args.handedness)
+    features_full = extract_geometry_features(
+        sequence,
+        handedness=args.handedness,
+        floor_angle_degrees=args.floor_angle_degrees,
+    )
     proposals = find_motion_proposals(features_full, fps=sequence.fps)
     raw_proposal_count = len(proposals)
     proposals = merge_motion_proposals(proposals, features_full, fps=sequence.fps)
@@ -415,7 +429,7 @@ def main() -> None:
         print(f"Mode: full sequence ({mode_reason})")
         phases, results, contexts, phase_views = analyse_clip(
             sequence, args.technique, rules_by_view, args.handedness,
-            "stroke-1", selected_view
+            "stroke-1", selected_view, args.floor_angle_degrees
         )
         report["strokes"].append({
             "stroke_id": 1,
@@ -447,7 +461,8 @@ def main() -> None:
         )
         clip_seq = stroke.clip(sequence)
         phases, results, contexts, phase_views = analyse_clip(
-            clip_seq, args.technique, rules_by_view, args.handedness, label, selected_view
+            clip_seq, args.technique, rules_by_view, args.handedness, label,
+            selected_view, args.floor_angle_degrees
         )
         report["strokes"].append({
             "stroke_id": i,

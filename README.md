@@ -56,6 +56,29 @@ Tao video preview co skeleton:
 python scripts/inference/render_pose.py data/raw/sample.mp4 outputs/sample_pose.npz outputs/sample_pose_preview.mp4
 ```
 
+Khi trich pose de xay reference hoac cham diem hinh hoc, dung preset do chinh
+xac cao. Preset nay loai pose spike bang Hampel, noi suy chi cac gap ngan, sau
+do loc Butterworth zero-phase theo tan so 6 Hz de khong dich thoi diem contact:
+
+```bash
+python scripts/inference/extract_pose.py data/raw/sample.mp4 outputs/sample_pose.npz \
+  --config configs/pose/yolov8_high_accuracy.yaml
+```
+
+Neu camera bi nghieng, do goc cua mot duong san nam ngang trong anh (duong
+doc anh huong xuong ben phai la goc duong) va truyen cung quy uoc khi xay
+reference va khi cham video. Vi du:
+
+```bash
+python scripts/data/build_reference_profiles.py forehand_lift --view front \
+  --floor-angle-degrees 3.5
+python scripts/evaluation/check_technique_rules.py outputs/sample_pose.npz \
+  forehand_lift --floor-angle-degrees 3.5
+```
+
+Khong dung preset geometry cho checkpoint action-recognition da train bang
+EMA neu chua train lai, vi thay doi preprocessing tao ra distribution shift.
+
 ## Chuan bi dataset ST-GCN
 
 Trich xuat skeleton cho toan bo dataset. Video `match` tu dong chon nguoi o

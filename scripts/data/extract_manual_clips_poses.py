@@ -102,11 +102,7 @@ def main() -> None:
 
     model = YOLO(str(config.get("model", "yolov8n-pose.pt")))
     smoothing = config.get("smoothing", {})
-    smoother = KeypointSmoother(
-        alpha=float(smoothing.get("alpha", 0.35)),
-        min_confidence=float(smoothing.get("min_confidence", 0.30)),
-        max_gap=int(smoothing.get("max_gap", 4)),
-    )
+    smoother = KeypointSmoother.from_config(smoothing)
     device = args.device if args.device is not None else config.get("device")
 
     failures: list[tuple[Path, str]] = []

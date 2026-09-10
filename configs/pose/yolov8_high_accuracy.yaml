@@ -12,3 +12,9 @@ smoothing:
   alpha: 0.35
   min_confidence: 0.4
   max_gap: 3
+  filter_type: butterworth
+  cutoff_hz: 6.0
+  filter_order: 2
+  reject_outliers: true
+  hampel_window_seconds: 0.12
+  hampel_n_sigma: 3.0

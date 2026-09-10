@@ -25,7 +25,10 @@ def robust_range(values: np.ndarray) -> float:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
-    parser.add_argument("--config", type=Path, default=Path("configs/pose/yolov8.yaml"))
+    parser.add_argument(
+        "--config", type=Path,
+        default=Path("configs/pose/yolov8_high_accuracy.yaml"),
+    )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--report", type=Path)
     parser.add_argument(
@@ -43,11 +46,7 @@ def main() -> None:
         target_region="single",
     )
     smoothing = config.get("smoothing", {})
-    smoother = KeypointSmoother(
-        alpha=float(smoothing.get("alpha", 0.35)),
-        min_confidence=float(smoothing.get("min_confidence", 0.3)),
-        max_gap=int(smoothing.get("max_gap", 4)),
-    )
+    smoother = KeypointSmoother.from_config(smoothing)
     videos = sorted(args.root.rglob("*.mp4"))
     if not videos:
         raise FileNotFoundError(f"No MP4 candidates found under {args.root}")

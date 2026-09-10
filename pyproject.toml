@@ -11,6 +11,7 @@ dependencies = [
     'numpy>=1.24',
     'opencv-python>=4.8',
     'PyYAML>=6.0',
+    'scipy>=1.10',
     'ultralytics>=8.3,<9',
 ]
 

@@ -38,11 +38,7 @@ def main() -> None:
     output_root = Path(config["pose_output_root"])
     model = YOLO(config["model"])
     smoothing = config["smoothing"]
-    smoother = KeypointSmoother(
-        alpha=float(smoothing["alpha"]),
-        min_confidence=float(smoothing["min_confidence"]),
-        max_gap=int(smoothing["max_gap"]),
-    )
+    smoother = KeypointSmoother.from_config(smoothing)
 
     jobs: list[tuple[Path, Path, dict]] = []
     for action in config["classes"]:

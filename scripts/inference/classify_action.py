@@ -107,11 +107,7 @@ def extract_pose(video: Path, config_path: Path, target: str) -> PoseSequence:
     sequence = estimator.extract(video)
     smoothing = config.get("smoothing", {})
     if smoothing.get("enabled", True):
-        sequence = KeypointSmoother(
-            alpha=float(smoothing.get("alpha", 0.35)),
-            min_confidence=float(smoothing.get("min_confidence", 0.3)),
-            max_gap=int(smoothing.get("max_gap", 4)),
-        ).smooth(sequence)
+        sequence = KeypointSmoother.from_config(smoothing).smooth(sequence)
     return sequence
 
 
