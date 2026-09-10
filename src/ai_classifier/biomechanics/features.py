@@ -209,7 +209,10 @@ def detect_stroke_phases(
     plausible = (
         all(end - start >= min_phase for start, end in ranges)
         and 0.35 <= contact_ratio <= 0.90
-        and follow_ratio <= 0.45
+        # Allow contact near the middle for compact instructional clips. A
+        # 45% cutoff was brittle at 30 FPS: moving the selected peak by one
+        # frame could invalidate an otherwise complete stroke.
+        and follow_ratio <= 0.50
         and np.isfinite(peak_speed)
         and top_score > 0
     )

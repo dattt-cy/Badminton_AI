@@ -194,6 +194,26 @@ def test_detect_stroke_phases_rejects_edge_peak_and_empty_phases() -> None:
     assert not detect_stroke_phases(features).valid
 
 
+def test_detect_stroke_phases_accepts_mid_clip_contact_with_complete_recovery() -> None:
+    """A one-frame peak shift at 30 FPS must not reject a complete stroke."""
+    speed = np.full(88, 0.1, dtype=np.float32)
+    speed[15:28] = 1.0
+    speed[28:31] = 0.05
+    speed[31:43] = np.linspace(0.5, 3.0, 12)
+    speed[43:48] = [4.0, 7.0, 9.0, 7.0, 4.0]
+    speed[48:60] = np.linspace(3.0, 0.2, 12)
+    features = GeometryFeatures(
+        ("wrist_speed",), speed[:, None], np.ones((88, 1), dtype=np.float32),
+        np.arange(88, dtype=np.float32) / 30,
+    )
+
+    phases = detect_stroke_phases(features)
+
+    assert phases.valid
+    assert 43 <= phases.contact_frame <= 47
+    assert (88 - phases.contact_estimated[1]) / 88 > 0.45
+
+
 def test_contact_selector_prefers_coordinated_later_swing_over_early_wrist_burst() -> None:
     frame_count = 100
     wrist = np.full(frame_count, 0.1, dtype=np.float32)
