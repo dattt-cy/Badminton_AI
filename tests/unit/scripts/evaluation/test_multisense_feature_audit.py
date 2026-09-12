@@ -2,7 +2,7 @@ import importlib.util
 from pathlib import Path
 
 
-SCRIPT = Path(__file__).parents[2] / "scripts/evaluation/audit_multisense_features.py"
+SCRIPT = Path(__file__).parents[4] / "scripts/evaluation/audit_multisense_features.py"
 SPEC = importlib.util.spec_from_file_location("audit_multisense_features", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None

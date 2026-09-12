@@ -11,7 +11,7 @@ def _skeleton(frames=8):
     xyz = np.zeros((frames, 21, 3), dtype=np.float32)
     j = MULTISENSE_JOINT_INDEX
     xyz[:, j["Hips"]] = (0, 0, 0)
-    xyz[:, j["Spine3"]] = (0, 2, 0)
+    xyz[:, j["Neck"]] = (0, 2, 0)
     xyz[:, j["RightShoulder"]] = (-0.5, 2, 0)
     xyz[:, j["RightArm"]] = (-1, 2, 0)
     xyz[:, j["RightForeArm"]] = (-1, 1, 0)

@@ -53,9 +53,8 @@ expert validation.
 
 - Short uploads up to five seconds with at most one motion proposal use the
   full pose sequence so preparation and follow-through are not cut away.
-- Automatic view selection is phase-aware. Ratios below 0.30 use the side
-  profile, ratios above 0.45 use front, and the interval between them is treated
-  as oblique. Oblique phases are only marked as deviations when front and side
-  profiles agree; disagreements are returned for review.
+- Camera view is supplied explicitly for the whole clip. Projected body
+  orientation is measured per phase only to mark rules as review or
+  insufficient when the athlete rotates out of the observable 2D plane.
 - `forehand_clear` wrist-height rules are temporarily excluded because the
   current 2D reference envelopes conflict with visually valid overhead contact.

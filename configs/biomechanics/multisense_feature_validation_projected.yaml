@@ -1,0 +1,452 @@
+version: 1
+validation_kind: yolo_2d_against_camera_projected_multisense_3d_subject_holdout
+holdout_rule: subject number >= 16
+runtime_policy:
+  validated: allow_pass_or_deviation
+  review: force_review
+  rejected: insufficient_data
+  missing: insufficient_data
+minimum_samples: 100
+minimum_subjects: 3
+projection_quality_gates:
+  min_alignment_correlation: 0.5
+  max_camera_median_error: 0.15
+  max_camera_p90_error: 0.3
+  min_pose_scale_px: 0.0
+status_counts:
+  rejected: 9
+  review: 13
+  validated: 2
+techniques:
+  backhand_drive:
+    views:
+      front:
+        features:
+          elbow_angle:
+            status: rejected
+            unit: degree
+            sample_count: 185
+            subject_count: 2
+            subjects:
+            - Sub18
+            - Sub21
+            mae: 33.909288215637204
+            median_absolute_error: 25.903396606445312
+            p90_absolute_error: 69.66986389160155
+            pearson_correlation: 0.12097131652395324
+            limits:
+              max_mae: 12.0
+              max_p90: 25.0
+              min_correlation: 0.4
+          wrist_shoulder_distance:
+            status: rejected
+            unit: body_scale_ratio
+            sample_count: 185
+            subject_count: 2
+            subjects:
+            - Sub18
+            - Sub21
+            mae: 0.21532662535035932
+            median_absolute_error: 0.19120413064956665
+            p90_absolute_error: 0.41477109193801875
+            pearson_correlation: 0.08400880408963224
+            limits:
+              max_mae: 0.2
+              max_p90: 0.4
+              min_correlation: 0.4
+          wrist_height:
+            status: review
+            unit: body_scale_ratio
+            sample_count: 185
+            subject_count: 2
+            subjects:
+            - Sub18
+            - Sub21
+            mae: 0.2648337691040659
+            median_absolute_error: 0.23319751024246216
+            p90_absolute_error: 0.5135015130043028
+            pearson_correlation: 0.6233833877698922
+            limits:
+              max_mae: 0.25
+              max_p90: 0.5
+              min_correlation: 0.4
+          elbow_torso_distance:
+            status: review
+            unit: body_scale_ratio
+            sample_count: 185
+            subject_count: 2
+            subjects:
+            - Sub18
+            - Sub21
+            mae: 0.1350644633702531
+            median_absolute_error: 0.11785602569580078
+            p90_absolute_error: 0.2781663298606872
+            pearson_correlation: 0.8871416899319298
+            limits:
+              max_mae: 0.2
+              max_p90: 0.4
+              min_correlation: 0.4
+          torso_lean:
+            status: review
+            unit: degree
+            sample_count: 185
+            subject_count: 2
+            subjects:
+            - Sub18
+            - Sub21
+            mae: 2.6339327221585287
+            median_absolute_error: 1.9493694305419922
+            p90_absolute_error: 5.895826530456543
+            pearson_correlation: 0.17158081442190457
+            limits:
+              max_mae: 8.0
+              max_p90: 18.0
+              min_correlation: 0.4
+          stance_width:
+            status: review
+            unit: body_scale_ratio
+            sample_count: 185
+            subject_count: 2
+            subjects:
+            - Sub18
+            - Sub21
+            mae: 0.29706053592868753
+            median_absolute_error: 0.2512946128845215
+            p90_absolute_error: 0.5776839971542358
+            pearson_correlation: 0.7683680189157706
+            limits:
+              max_mae: 0.2
+              max_p90: 0.4
+              min_correlation: 0.4
+      side:
+        features:
+          elbow_angle:
+            status: rejected
+            unit: degree
+            sample_count: 470
+            subject_count: 4
+            subjects:
+            - Sub16
+            - Sub19
+            - Sub21
+            - Sub24
+            mae: 26.61784189305407
+            median_absolute_error: 21.353790283203125
+            p90_absolute_error: 52.52807922363282
+            pearson_correlation: 0.2461768316742336
+            limits:
+              max_mae: 12.0
+              max_p90: 25.0
+              min_correlation: 0.4
+          wrist_shoulder_distance:
+            status: rejected
+            unit: body_scale_ratio
+            sample_count: 470
+            subject_count: 4
+            subjects:
+            - Sub16
+            - Sub19
+            - Sub21
+            - Sub24
+            mae: 0.26980240776183756
+            median_absolute_error: 0.2442019283771515
+            p90_absolute_error: 0.47392655611038215
+            pearson_correlation: -0.06989436682272857
+            limits:
+              max_mae: 0.2
+              max_p90: 0.4
+              min_correlation: 0.4
+          wrist_height:
+            status: review
+            unit: body_scale_ratio
+            sample_count: 470
+            subject_count: 4
+            subjects:
+            - Sub16
+            - Sub19
+            - Sub21
+            - Sub24
+            mae: 0.33649203336000083
+            median_absolute_error: 0.2885945290327072
+            p90_absolute_error: 0.5904108844697477
+            pearson_correlation: 0.45080079746059976
+            limits:
+              max_mae: 0.25
+              max_p90: 0.5
+              min_correlation: 0.4
+          elbow_torso_distance:
+            status: validated
+            unit: body_scale_ratio
+            sample_count: 470
+            subject_count: 4
+            subjects:
+            - Sub16
+            - Sub19
+            - Sub21
+            - Sub24
+            mae: 0.13628889330314625
+            median_absolute_error: 0.10525010526180267
+            p90_absolute_error: 0.3082201056182385
+            pearson_correlation: 0.7128235163062672
+            limits:
+              max_mae: 0.2
+              max_p90: 0.4
+              min_correlation: 0.4
+          torso_lean:
+            status: rejected
+            unit: degree
+            sample_count: 470
+            subject_count: 4
+            subjects:
+            - Sub16
+            - Sub19
+            - Sub21
+            - Sub24
+            mae: 5.505503513999383
+            median_absolute_error: 3.8343191742897034
+            p90_absolute_error: 11.473931932449343
+            pearson_correlation: 0.13162270451326016
+            limits:
+              max_mae: 8.0
+              max_p90: 18.0
+              min_correlation: 0.4
+          stance_width:
+            status: review
+            unit: body_scale_ratio
+            sample_count: 470
+            subject_count: 4
+            subjects:
+            - Sub16
+            - Sub19
+            - Sub21
+            - Sub24
+            mae: 0.23279241690055488
+            median_absolute_error: 0.10087782703340054
+            p90_absolute_error: 0.46337328851223036
+            pearson_correlation: 0.18707107315750704
+            limits:
+              max_mae: 0.2
+              max_p90: 0.4
+              min_correlation: 0.4
+  forehand_clear:
+    views:
+      front:
+        features:
+          elbow_angle:
+            status: rejected
+            unit: degree
+            sample_count: 258
+            subject_count: 4
+            subjects:
+            - Sub16
+            - Sub19
+            - Sub21
+            - Sub24
+            mae: 32.14034414291382
+            median_absolute_error: 18.829792022705078
+            p90_absolute_error: 79.3102638244629
+            pearson_correlation: 0.20533981617836314
+            limits:
+              max_mae: 12.0
+              max_p90: 25.0
+              min_correlation: 0.4
+          wrist_shoulder_distance:
+            status: rejected
+            unit: body_scale_ratio
+            sample_count: 258
+            subject_count: 4
+            subjects:
+            - Sub16
+            - Sub19
+            - Sub21
+            - Sub24
+            mae: 0.4240383334284605
+            median_absolute_error: 0.3880919814109802
+            p90_absolute_error: 0.9211212813854217
+            pearson_correlation: 0.16209866535692688
+            limits:
+              max_mae: 0.2
+              max_p90: 0.4
+              min_correlation: 0.4
+          wrist_height:
+            status: rejected
+            unit: body_scale_ratio
+            sample_count: 258
+            subject_count: 4
+            subjects:
+            - Sub16
+            - Sub19
+            - Sub21
+            - Sub24
+            mae: 0.5449809962978983
+            median_absolute_error: 0.42246659845113754
+            p90_absolute_error: 1.1447791308164597
+            pearson_correlation: 0.44591861591010706
+            limits:
+              max_mae: 0.25
+              max_p90: 0.5
+              min_correlation: 0.4
+          elbow_torso_distance:
+            status: review
+            unit: body_scale_ratio
+            sample_count: 258
+            subject_count: 4
+            subjects:
+            - Sub16
+            - Sub19
+            - Sub21
+            - Sub24
+            mae: 0.21313561419523214
+            median_absolute_error: 0.17344249784946442
+            p90_absolute_error: 0.4486142843961717
+            pearson_correlation: 0.32399670955845666
+            limits:
+              max_mae: 0.2
+              max_p90: 0.4
+              min_correlation: 0.4
+          torso_lean:
+            status: review
+            unit: degree
+            sample_count: 258
+            subject_count: 4
+            subjects:
+            - Sub16
+            - Sub19
+            - Sub21
+            - Sub24
+            mae: 4.073151231851688
+            median_absolute_error: 2.8511747121810913
+            p90_absolute_error: 8.1449960231781
+            pearson_correlation: 0.30140349611947304
+            limits:
+              max_mae: 8.0
+              max_p90: 18.0
+              min_correlation: 0.4
+          stance_width:
+            status: review
+            unit: body_scale_ratio
+            sample_count: 258
+            subject_count: 4
+            subjects:
+            - Sub16
+            - Sub19
+            - Sub21
+            - Sub24
+            mae: 0.27965086633556113
+            median_absolute_error: 0.20636340975761414
+            p90_absolute_error: 0.6349035382270813
+            pearson_correlation: 0.6509070655878442
+            limits:
+              max_mae: 0.2
+              max_p90: 0.4
+              min_correlation: 0.4
+      side:
+        features:
+          elbow_angle:
+            status: rejected
+            unit: degree
+            sample_count: 306
+            subject_count: 4
+            subjects:
+            - Sub16
+            - Sub19
+            - Sub21
+            - Sub24
+            mae: 39.61554584316179
+            median_absolute_error: 32.86577224731445
+            p90_absolute_error: 82.51026916503906
+            pearson_correlation: 0.22184830760804317
+            limits:
+              max_mae: 12.0
+              max_p90: 25.0
+              min_correlation: 0.4
+          wrist_shoulder_distance:
+            status: review
+            unit: body_scale_ratio
+            sample_count: 306
+            subject_count: 4
+            subjects:
+            - Sub16
+            - Sub19
+            - Sub21
+            - Sub24
+            mae: 0.21928691306437542
+            median_absolute_error: 0.17456228286027908
+            p90_absolute_error: 0.4506528675556183
+            pearson_correlation: 0.3357340760039469
+            limits:
+              max_mae: 0.2
+              max_p90: 0.4
+              min_correlation: 0.4
+          wrist_height:
+            status: review
+            unit: body_scale_ratio
+            sample_count: 306
+            subject_count: 4
+            subjects:
+            - Sub16
+            - Sub19
+            - Sub21
+            - Sub24
+            mae: 0.3978182693785117
+            median_absolute_error: 0.308848038315773
+            p90_absolute_error: 0.745522229000926
+            pearson_correlation: 0.43064217510710234
+            limits:
+              max_mae: 0.25
+              max_p90: 0.5
+              min_correlation: 0.4
+          elbow_torso_distance:
+            status: review
+            unit: body_scale_ratio
+            sample_count: 306
+            subject_count: 4
+            subjects:
+            - Sub16
+            - Sub19
+            - Sub21
+            - Sub24
+            mae: 0.19242473725903644
+            median_absolute_error: 0.14041834324598312
+            p90_absolute_error: 0.4156404808163643
+            pearson_correlation: 0.40189109980940324
+            limits:
+              max_mae: 0.2
+              max_p90: 0.4
+              min_correlation: 0.4
+          torso_lean:
+            status: validated
+            unit: degree
+            sample_count: 306
+            subject_count: 4
+            subjects:
+            - Sub16
+            - Sub19
+            - Sub21
+            - Sub24
+            mae: 4.8673974839069585
+            median_absolute_error: 3.851208359003067
+            p90_absolute_error: 11.317468404769897
+            pearson_correlation: 0.6251441002726938
+            limits:
+              max_mae: 8.0
+              max_p90: 18.0
+              min_correlation: 0.4
+          stance_width:
+            status: review
+            unit: body_scale_ratio
+            sample_count: 306
+            subject_count: 4
+            subjects:
+            - Sub16
+            - Sub19
+            - Sub21
+            - Sub24
+            mae: 0.17802940995061126
+            median_absolute_error: 0.09346185252070427
+            p90_absolute_error: 0.4374488741159439
+            pearson_correlation: 0.6375164221852987
+            limits:
+              max_mae: 0.2
+              max_p90: 0.4
+              min_correlation: 0.4

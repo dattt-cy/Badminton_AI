@@ -126,6 +126,18 @@ class PhaseBoundaries:
     contact_confidence: float = 0.0
     contact_candidates: tuple[int, ...] = ()
     invalid_reason: str | None = None
+    peak_source: str = "automatic"
+
+
+@dataclass(frozen=True)
+class StrokeGeometrySummary:
+    """Human-readable aggregate measurements for one detected stroke."""
+
+    elbow_extension_delta: float
+    wrist_path_length: float
+    wrist_vertical_excursion: float
+    balance_offset_preparation: float
+    phase_duration_ratios: dict[str, float]
 
 
 def detect_stroke_phases(
@@ -133,6 +145,7 @@ def detect_stroke_phases(
     *,
     prep_speed_ratio: float = 0.15,
     contact_window_frames: int = 2,
+    swing_peak_frame: int | None = None,
 ) -> PhaseBoundaries:
     """Propose phase boundaries from robust contact candidates.
 
@@ -172,13 +185,30 @@ def detect_stroke_phases(
     position = candidates / max(frame_count - 1, 1)
     temporal_prior = 0.40 + 0.60 * np.exp(-0.5 * ((position - 0.70) / 0.24) ** 2)
     ranked_score = np.where(interior, contact_score * temporal_prior, -np.inf)
-    contact_frame = int(np.argmax(ranked_score))
-    candidate_frames = _separated_contact_candidates(
+    automatic_candidates = _separated_contact_candidates(
         ranked_score, min_separation=max(contact_window_frames * 2 + 1, int(frame_count * 0.12))
     )
+    if swing_peak_frame is not None:
+        contact_frame = int(swing_peak_frame)
+        if contact_frame < 0 or contact_frame >= frame_count:
+            raise ValueError("swing_peak_frame must be inside the feature sequence")
+        if not interior[contact_frame]:
+            empty = (0, 0)
+            return PhaseBoundaries(
+                empty, empty, empty, empty, empty, contact_frame, False,
+                invalid_reason="manual_swing_peak_not_measurable",
+                peak_source="manual",
+            )
+        candidate_frames = [contact_frame] + [
+            frame for frame in automatic_candidates if frame != contact_frame
+        ]
+        candidate_frames = candidate_frames[:3]
+    else:
+        contact_frame = int(np.argmax(ranked_score))
+        candidate_frames = automatic_candidates
     top_score = float(ranked_score[contact_frame])
     second_score = float(ranked_score[candidate_frames[1]]) if len(candidate_frames) > 1 else 0.0
-    contact_confidence = (
+    contact_confidence = 1.0 if swing_peak_frame is not None else (
         (top_score - second_score) / max(top_score, 1e-6) if top_score > 0 else 0.0
     )
     peak_speed = speed[contact_frame]
@@ -214,7 +244,7 @@ def detect_stroke_phases(
         # frame could invalidate an otherwise complete stroke.
         and follow_ratio <= 0.50
         and np.isfinite(peak_speed)
-        and top_score > 0
+        and (top_score > 0 or swing_peak_frame is not None)
     )
     reason = None
     if not plausible:
@@ -233,6 +263,7 @@ def detect_stroke_phases(
         contact_confidence=contact_confidence,
         contact_candidates=tuple(candidate_frames),
         invalid_reason=reason,
+        peak_source="manual" if swing_peak_frame is not None else "automatic",
     )
 
 
@@ -313,6 +344,9 @@ def extract_geometry_features(
     hip = RIGHT_HIP if handedness == "right" else LEFT_HIP
     knee = RIGHT_KNEE if handedness == "right" else LEFT_KNEE
     ankle = RIGHT_ANKLE if handedness == "right" else LEFT_ANKLE
+    arm_tracking_stable = _stable_projected_limb(
+        keypoints, shoulder, elbow, wrist, min_confidence
+    )
 
     frame_scale, scale_confidence = _body_scale(keypoints, min_confidence)
     finite_scale = frame_scale[np.isfinite(frame_scale)]
@@ -341,8 +375,10 @@ def extract_geometry_features(
             # the camera or the detector collapses/swaps elbow and wrist. Such
             # frames contain no defensible 2D anatomical angle.
             implausible_projection = np.isfinite(value) & (value < 10.0)
-            value[implausible_projection] = np.nan
-            confidence[implausible_projection] = 0.0
+            unstable_tracking = ~arm_tracking_stable
+            rejected = implausible_projection | unstable_tracking
+            value[rejected] = np.nan
+            confidence[rejected] = 0.0
         names.append(name)
         columns.append(value)
         confidences.append(confidence)
@@ -365,9 +401,14 @@ def extract_geometry_features(
     shoulder_xy = keypoints[:, shoulder, :2]
     elbow_xy = keypoints[:, elbow, :2]
     arm_confidence = np.minimum(keypoints[:, wrist, 2], keypoints[:, shoulder, 2])
-    arm_valid = (arm_confidence >= min_confidence) & (scale > 0)
+    arm_valid = (
+        (arm_confidence >= min_confidence) & (scale > 0) & arm_tracking_stable
+    )
     elbow_shoulder_confidence = np.minimum(keypoints[:, elbow, 2], keypoints[:, shoulder, 2])
-    elbow_valid = (elbow_shoulder_confidence >= min_confidence) & (scale > 0)
+    elbow_valid = (
+        (elbow_shoulder_confidence >= min_confidence)
+        & (scale > 0) & arm_tracking_stable
+    )
 
     wrist_distance = _safe_scale(np.linalg.norm(wrist_xy - shoulder_xy, axis=1), scale)
     wrist_height = _safe_scale(shoulder_xy[:, 1] - wrist_xy[:, 1], scale)
@@ -405,6 +446,19 @@ def extract_geometry_features(
     columns.append(stance_width.astype(np.float32))
     confidences.append(np.where(stance_valid, ankle_confidence, 0).astype(np.float32))
 
+    ankle_midpoint = (
+        keypoints[:, LEFT_ANKLE, :2] + keypoints[:, RIGHT_ANKLE, :2]
+    ) / 2
+    balance_confidence = np.min(
+        keypoints[:, [LEFT_HIP, RIGHT_HIP, LEFT_ANKLE, RIGHT_ANKLE], 2], axis=1
+    )
+    balance_valid = (balance_confidence >= min_confidence) & (scale > 0)
+    balance_offset = _safe_scale(np.abs(mid_hip[:, 0] - ankle_midpoint[:, 0]), scale)
+    balance_offset[~balance_valid] = np.nan
+    names.append("balance_offset")
+    columns.append(balance_offset.astype(np.float32))
+    confidences.append(np.where(balance_valid, balance_confidence, 0).astype(np.float32))
+
     wrist_speed = _point_speed(wrist_xy, scale, sequence.fps, arm_valid)
     elbow_speed = _angular_speed(columns[0], sequence.fps)
     shoulder_speed = _angular_speed(columns[1], sequence.fps)
@@ -429,6 +483,117 @@ def extract_geometry_features(
         np.column_stack(confidences).astype(np.float32),
         timestamps,
     )
+
+
+def _stable_projected_limb(
+    keypoints: NDArray[np.float32], shoulder: int, elbow: int, wrist: int,
+    min_confidence: float,
+) -> NDArray[np.bool_]:
+    """Reject abrupt arm-segment collapse even when detector confidence is high."""
+    points = keypoints[:, [shoulder, elbow, wrist]]
+    confidence = np.min(points[..., 2], axis=1)
+    upper = np.linalg.norm(points[:, 0, :2] - points[:, 1, :2], axis=1)
+    lower = np.linalg.norm(points[:, 1, :2] - points[:, 2, :2], axis=1)
+    valid = (
+        (confidence >= min_confidence)
+        & np.isfinite(upper) & np.isfinite(lower)
+        & (upper > 1e-6) & (lower > 1e-6)
+    )
+    if valid.sum() < 3:
+        return valid
+
+    def local_median(values: NDArray[np.float32]) -> NDArray[np.float32]:
+        output = np.full(len(values), np.nan, dtype=np.float32)
+        for index in range(len(values)):
+            chunk_valid = valid[max(0, index-3):min(len(values), index+4)]
+            chunk = values[max(0, index-3):min(len(values), index+4)][chunk_valid]
+            if chunk.size:
+                output[index] = np.median(chunk)
+        return output
+
+    expected_upper = local_median(upper)
+    expected_lower = local_median(lower)
+    upper_ratio = upper / np.maximum(expected_upper, 1e-6)
+    lower_ratio = lower / np.maximum(expected_lower, 1e-6)
+    segment_ratio = upper / np.maximum(lower, 1e-6)
+    expected_segment_ratio = expected_upper / np.maximum(expected_lower, 1e-6)
+    ratio_change = segment_ratio / np.maximum(expected_segment_ratio, 1e-6)
+    mid_shoulder = (
+        keypoints[:, LEFT_SHOULDER, :2] + keypoints[:, RIGHT_SHOULDER, :2]
+    ) / 2
+    mid_hip = (keypoints[:, LEFT_HIP, :2] + keypoints[:, RIGHT_HIP, :2]) / 2
+    torso = np.linalg.norm(mid_shoulder - mid_hip, axis=1)
+    anatomical_scale = np.isfinite(torso) & (torso > 1e-6)
+    upper_torso_ratio = upper / np.maximum(torso, 1e-6)
+    lower_torso_ratio = lower / np.maximum(torso, 1e-6)
+    return (
+        valid & anatomical_scale
+        & (upper_ratio >= 0.45) & (upper_ratio <= 2.20)
+        & (lower_ratio >= 0.45) & (lower_ratio <= 2.20)
+        & (ratio_change >= 0.40) & (ratio_change <= 2.50)
+        & (upper_torso_ratio >= 0.12) & (upper_torso_ratio <= 1.25)
+        & (lower_torso_ratio >= 0.12) & (lower_torso_ratio <= 1.25)
+    )
+
+
+def summarize_stroke_geometry(
+    features: GeometryFeatures,
+    phases: PhaseBoundaries,
+) -> StrokeGeometrySummary:
+    """Summarize interpretable cross-phase changes without inventing a score."""
+    phase_names = (
+        "preparation", "backswing", "forward_swing",
+        "contact_estimated", "follow_through",
+    )
+    frame_count = max(len(features.timestamps), 1)
+    phase_ratios = {
+        name: (getattr(phases, name)[1] - getattr(phases, name)[0]) / frame_count
+        for name in phase_names
+    }
+    if not phases.valid:
+        return StrokeGeometrySummary(
+            float("nan"), float("nan"), float("nan"), float("nan"), phase_ratios
+        )
+
+    backswing_elbow = _phase_median(features, phases.backswing, "elbow_angle")
+    peak_elbow = _phase_median(features, phases.contact_estimated, "elbow_angle")
+    elbow_delta = peak_elbow - backswing_elbow
+
+    wrist_height = features.column("wrist_height")
+    finite_height = wrist_height[np.isfinite(wrist_height)]
+    wrist_excursion = (
+        float(np.max(finite_height) - np.min(finite_height))
+        if finite_height.size else float("nan")
+    )
+
+    speed = features.column("wrist_speed")
+    if len(speed) > 1:
+        delta_t = np.diff(features.timestamps, prepend=features.timestamps[0])
+        valid = np.isfinite(speed) & np.isfinite(delta_t) & (delta_t >= 0)
+        wrist_path = float(np.sum(speed[valid] * delta_t[valid]))
+    else:
+        wrist_path = float("nan")
+
+    return StrokeGeometrySummary(
+        elbow_extension_delta=float(elbow_delta),
+        wrist_path_length=wrist_path,
+        wrist_vertical_excursion=wrist_excursion,
+        balance_offset_preparation=_phase_median(
+            features, phases.preparation, "balance_offset"
+        ),
+        phase_duration_ratios=phase_ratios,
+    )
+
+
+def _phase_median(
+    features: GeometryFeatures,
+    frame_range: tuple[int, int],
+    feature_name: str,
+) -> float:
+    start, end = frame_range
+    values = features.column(feature_name)[start:end]
+    finite = values[np.isfinite(values)]
+    return float(np.median(finite)) if finite.size else float("nan")
 
 
 def estimate_pose_scale_px(

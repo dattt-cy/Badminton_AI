@@ -10,8 +10,8 @@ from .features import GeometryFeatures
 
 MULTISENSE_JOINTS = (
     "Hips", "RightUpLeg", "RightLeg", "RightFoot", "LeftUpLeg",
-    "LeftLeg", "LeftFoot", "Spine", "Spine1", "Spine2", "Spine3",
-    "Neck", "Head", "RightShoulder", "RightArm", "RightForeArm",
+    "LeftLeg", "LeftFoot", "Spine", "Spine1", "Spine2", "Neck",
+    "Neck1", "Head", "RightShoulder", "RightArm", "RightForeArm",
     "RightHand", "LeftShoulder", "LeftArm", "LeftForeArm", "LeftHand",
 )
 MULTISENSE_JOINT_INDEX = {name: index for index, name in enumerate(MULTISENSE_JOINTS)}
@@ -39,7 +39,7 @@ def extract_multisense_geometry_features(
     side = "Right" if handedness == "right" else "Left"
     shoulder, elbow, wrist = joint[f"{side}Arm"], joint[f"{side}ForeArm"], joint[f"{side}Hand"]
     hip, knee, ankle = joint[f"{side}UpLeg"], joint[f"{side}Leg"], joint[f"{side}Foot"]
-    hips, upper_torso = joint["Hips"], joint["Spine3"]
+    hips, upper_torso = joint["Hips"], joint["Neck"]
     angle_specs = (
         ("elbow_angle", shoulder, elbow, wrist),
         ("shoulder_angle", joint[f"{side}Shoulder"], shoulder, elbow),

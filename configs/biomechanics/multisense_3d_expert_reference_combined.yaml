@@ -1,0 +1,272 @@
+version: 1
+reference_kind: expert_multisense_3d
+reference_status: provisional
+coordinate_space: multisense_global_3d
+usage: validation_and_2d_to_3d_corrected_features_only
+warning: Do not compare these ranges directly with raw 2D video angles.
+source_files:
+- outputs\multisense_part2_correction_audit.csv
+- outputs\multisense_part3_correction_audit.csv
+filters:
+  skill_level: Expert
+  phase_valid: true
+  accepted_hitting_sounds:
+  - Good
+  min_contact_confidence: 0.5
+  low_percentile: 10.0
+  high_percentile: 90.0
+  min_samples_per_feature: 10
+selected_stroke_count: 1001
+excluded_stroke_count_by_reason:
+  invalid_phase: 398
+  low_contact_confidence: 186
+  non_expert: 3523
+  unaccepted_hitting_sound: 102
+techniques:
+  backhand_drive:
+    stroke_count: 367
+    subject_count: 5
+    subjects:
+    - Sub11
+    - Sub14
+    - Sub19
+    - Sub20
+    - Sub24
+    stroke_count_by_source:
+      part2: 52
+      part3: 315
+    features:
+      backswing__elbow_angle:
+        phase: backswing
+        feature: elbow_angle
+        unit: degree
+        low: 116.01028594970703
+        median: 126.77289581298828
+        high: 139.73889770507813
+        mean: 126.31589560027993
+        std: 11.241904048017027
+        sample_count: 367
+      backswing__elbow_torso_distance:
+        phase: backswing
+        feature: elbow_torso_distance
+        unit: shoulder_width_ratio
+        low: 0.7217071533203125
+        median: 0.8209507465362549
+        high: 0.917716932296753
+        mean: 0.8198089524900556
+        std: 0.0786574693652612
+        sample_count: 367
+      backswing__wrist_height:
+        phase: backswing
+        feature: wrist_height
+        unit: shoulder_width_ratio
+        low: -0.9182657718658447
+        median: -0.7213962078094482
+        high: -0.4832641005516051
+        mean: -0.715001440949596
+        std: 0.1692710269603838
+        sample_count: 367
+      contact_estimated__elbow_angle:
+        phase: contact_estimated
+        feature: elbow_angle
+        unit: degree
+        low: 129.08502807617188
+        median: 143.49203491210938
+        high: 159.8578826904297
+        mean: 143.8363679267405
+        std: 12.38495221762445
+        sample_count: 367
+      contact_estimated__wrist_height:
+        phase: contact_estimated
+        feature: wrist_height
+        unit: shoulder_width_ratio
+        low: -0.3872535824775696
+        median: -0.10419146716594696
+        high: 0.22334215044975286
+        mean: -0.08586064209350783
+        std: 0.2384885425255583
+        sample_count: 367
+      contact_estimated__wrist_shoulder_distance:
+        phase: contact_estimated
+        feature: wrist_shoulder_distance
+        unit: shoulder_width_ratio
+        low: 1.0541842222213744
+        median: 1.111167311668396
+        high: 1.2550462484359741
+        mean: 1.1411156988923492
+        std: 0.08204405628545924
+        sample_count: 367
+      follow_through__elbow_angle:
+        phase: follow_through
+        feature: elbow_angle
+        unit: degree
+        low: 148.9598388671875
+        median: 157.45098876953125
+        high: 174.11265869140627
+        mean: 158.94985140766696
+        std: 10.77174527438932
+        sample_count: 367
+      follow_through__wrist_shoulder_distance:
+        phase: follow_through
+        feature: wrist_shoulder_distance
+        unit: shoulder_width_ratio
+        low: 1.0850435256958009
+        median: 1.1596623659133911
+        high: 1.271836757659912
+        mean: 1.1797670109720255
+        std: 0.07875486294414732
+        sample_count: 367
+      forward_swing__torso_lean:
+        phase: forward_swing
+        feature: torso_lean
+        unit: degree
+        low: 3.1864442825317383
+        median: 16.566814422607422
+        high: 26.113733673095705
+        mean: 15.192938856272995
+        std: 9.01805559606065
+        sample_count: 367
+      preparation__stance_width:
+        phase: preparation
+        feature: stance_width
+        unit: shoulder_width_ratio
+        low: 0.811681580543518
+        median: 0.9739367365837097
+        high: 1.6457433700561526
+        mean: 1.1526673506001361
+        std: 0.3460127099358317
+        sample_count: 367
+      preparation__wrist_shoulder_distance:
+        phase: preparation
+        feature: wrist_shoulder_distance
+        unit: shoulder_width_ratio
+        low: 0.9530384778976441
+        median: 1.0414488315582275
+        high: 1.20183424949646
+        mean: 1.0740746152498417
+        std: 0.09672960753759784
+        sample_count: 367
+  forehand_clear:
+    stroke_count: 634
+    subject_count: 6
+    subjects:
+    - Sub09
+    - Sub11
+    - Sub14
+    - Sub19
+    - Sub20
+    - Sub24
+    stroke_count_by_source:
+      part2: 318
+      part3: 316
+    features:
+      backswing__elbow_angle:
+        phase: backswing
+        feature: elbow_angle
+        unit: degree
+        low: 49.107919692993164
+        median: 96.48377227783203
+        high: 127.10137481689453
+        mean: 94.14859210955984
+        std: 26.809100031274102
+        sample_count: 634
+      backswing__elbow_torso_distance:
+        phase: backswing
+        feature: elbow_torso_distance
+        unit: shoulder_width_ratio
+        low: 0.8022279560565948
+        median: 1.0325809121131897
+        high: 1.1626481413841248
+        mean: 0.9921847793394083
+        std: 0.1275208435598311
+        sample_count: 634
+      backswing__wrist_height:
+        phase: backswing
+        feature: wrist_height
+        unit: shoulder_width_ratio
+        low: -0.8318759679794312
+        median: -0.3406890332698822
+        high: 0.2910673648118973
+        mean: -0.24398857172195174
+        std: 0.4212620127726784
+        sample_count: 634
+      contact_estimated__elbow_angle:
+        phase: contact_estimated
+        feature: elbow_angle
+        unit: degree
+        low: 121.31485748291016
+        median: 140.12091064453125
+        high: 155.58856048583985
+        mean: 139.32200434832166
+        std: 13.571058870763917
+        sample_count: 634
+      contact_estimated__wrist_height:
+        phase: contact_estimated
+        feature: wrist_height
+        unit: shoulder_width_ratio
+        low: 0.9126096487045288
+        median: 1.028195321559906
+        high: 1.144711148738861
+        mean: 1.017816375153674
+        std: 0.14941550542856524
+        sample_count: 634
+      contact_estimated__wrist_shoulder_distance:
+        phase: contact_estimated
+        feature: wrist_shoulder_distance
+        unit: shoulder_width_ratio
+        low: 1.079571509361267
+        median: 1.2250850796699524
+        high: 1.2985514163970948
+        mean: 1.2110277763112487
+        std: 0.08139881384178627
+        sample_count: 634
+      follow_through__elbow_angle:
+        phase: follow_through
+        feature: elbow_angle
+        unit: degree
+        low: 130.80178985595703
+        median: 142.92855072021484
+        high: 156.45835876464844
+        mean: 143.14295504597084
+        std: 10.051704172127476
+        sample_count: 634
+      follow_through__wrist_shoulder_distance:
+        phase: follow_through
+        feature: wrist_shoulder_distance
+        unit: shoulder_width_ratio
+        low: 1.1194773077964784
+        median: 1.2066213488578796
+        high: 1.3211683630943298
+        mean: 1.2123711522821372
+        std: 0.07760594393251202
+        sample_count: 634
+      forward_swing__torso_lean:
+        phase: forward_swing
+        feature: torso_lean
+        unit: degree
+        low: 8.973929023742675
+        median: 14.664655208587646
+        high: 21.750985527038576
+        mean: 15.038589994238002
+        std: 5.162876369466598
+        sample_count: 634
+      preparation__stance_width:
+        phase: preparation
+        feature: stance_width
+        unit: shoulder_width_ratio
+        low: 0.5593784987926483
+        median: 0.7569305598735809
+        high: 1.3620689153671266
+        mean: 0.8691058105756808
+        std: 0.3002958101678024
+        sample_count: 634
+      preparation__wrist_shoulder_distance:
+        phase: preparation
+        feature: wrist_shoulder_distance
+        unit: shoulder_width_ratio
+        low: 0.5427373468875885
+        median: 1.0102830529212952
+        high: 1.1953178882598876
+        mean: 0.9845225558578028
+        std: 0.22406680077989066
+        sample_count: 634
