@@ -174,7 +174,9 @@ user-confirmed; an optional `--classifier-json` is recorded as a suggestion
 and never selects the rule set.
 The WSL option uses the two-class motion-onset checkpoint by default and
 writes `classification.json`. `analysis.json` exposes a compact `user_summary`
-alongside the complete technical report.
+alongside the complete technical report. `user_report.json` is the compact
+frontend payload; `user_report.md` is the Vietnamese report a user can read
+directly without understanding internal rule names.
 
 ## Model workflows
 

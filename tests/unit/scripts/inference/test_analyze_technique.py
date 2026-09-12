@@ -49,3 +49,39 @@ def test_infeasible_quality_stops_at_quality_report():
 
     assert result["overall"] == "insufficient_video_quality"
     assert result["strokes"] == []
+
+
+def test_user_report_is_plain_language_and_keeps_score_empty():
+    analysis = {
+        "overall": "review_available",
+        "selection": {
+            "technique": "forehand_clear", "view": "side", "handedness": "right"
+        },
+        "classifier_suggestion": {
+            "label": "forehand_clear", "confidence": 0.9,
+            "agreement_status": "confirmed", "message": "AI xác nhận.",
+        },
+        "quality": {
+            "geometry_feasible": True, "reasons": [],
+            "trajectory_quality": {"essential_valid_ratio": 0.95, "median_scale_px": 120},
+            "motion_proposals": [{"peak_time": 1.5}],
+        },
+        "user_feedback": [{
+            "good_signals": [],
+            "heuristic_observations": [{
+                "criterion": "leg_loading", "label": "Sử dụng chân",
+                "observed": 170.0, "unit": "degree", "status": "needs_review",
+                "message": "Hai gối khá thẳng.",
+            }],
+            "observations_for_review": [], "not_assessed": [],
+        }],
+        "disclaimer": "Bản thử nghiệm.",
+    }
+
+    report = MODULE.build_user_report(analysis)
+    markdown = MODULE.render_user_report_markdown(report)
+
+    assert report["score"] is None
+    assert report["needs_review"][0]["value"] == "170.0°"
+    assert "Kết quả phân tích Forehand clear" in markdown
+    assert "Chùng gối thêm" in markdown

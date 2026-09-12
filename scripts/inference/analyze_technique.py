@@ -16,6 +16,27 @@ from pathlib import Path
 
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv"}
+TECHNIQUE_LABELS = {
+    "forehand_clear": "Forehand clear",
+    "backhand_drive": "Backhand drive",
+}
+PHASE_LABELS = {
+    "preparation": "Chuẩn bị",
+    "backswing": "Vung vợt ra sau",
+    "forward_swing": "Tăng tốc",
+    "contact_estimated": "Gần thời điểm đánh cầu",
+    "follow_through": "Theo đà",
+}
+VIEW_LABELS = {"front": "Chính diện", "side": "Góc bên"}
+HAND_LABELS = {"left": "Trái", "right": "Phải"}
+IMPROVEMENT_TIPS = {
+    "contact_above_head": "Cố gắng tiếp xúc cầu ở vị trí cao và hơi phía trước vai.",
+    "contact_ahead_of_body": "Đưa điểm tiếp xúc ra phía trước cơ thể rõ hơn.",
+    "non_racket_arm_coordination": "Dùng tay không thuận để định hướng cầu và giữ thăng bằng.",
+    "leg_loading": "Chùng gối thêm khi chuẩn bị để hỗ trợ phát lực.",
+    "body_transfer": "Phối hợp chuyển trọng tâm và xoay thân rõ hơn.",
+    "followthrough_completion": "Tiếp tục vung vợt tự nhiên sau khi tiếp xúc cầu.",
+}
 
 
 def safe_stem(path: Path) -> str:
@@ -26,6 +47,185 @@ def safe_stem(path: Path) -> str:
 def run_command(command: list[str], *, cwd: Path) -> None:
     """Run one project CLI without shell-dependent quoting."""
     subprocess.run(command, cwd=cwd, check=True)
+
+
+def _display_value(value: object, unit: str | None) -> str | None:
+    if value is None:
+        return None
+    number = float(value)
+    if unit == "degree":
+        return f"{number:.1f}°"
+    if unit == "torso_height_ratio":
+        return f"{number:.2f} × chiều cao thân"
+    if unit == "body_scale_ratio":
+        return f"{number:.2f} × tỷ lệ cơ thể"
+    return f"{number:.2f}"
+
+
+def build_user_report(analysis: dict) -> dict:
+    """Reduce the technical analysis to one plain-language frontend payload."""
+    classifier = analysis.get("classifier_suggestion")
+    quality = analysis["quality"]
+    feedback = analysis.get("user_feedback", [])
+    observed, needs_review, measurements, unavailable = [], [], [], []
+    for block in feedback:
+        for item in block.get("good_signals", []):
+            observed.append({
+                "label": item["label"], "message": item["message"],
+                "value": _display_value(item.get("observed"), item.get("unit")),
+                "evidence": "validated",
+            })
+        for item in block.get("heuristic_observations", []):
+            target = observed if item["status"] == "observed" else needs_review
+            target.append({
+                "label": item["label"], "message": item["message"],
+                "value": _display_value(item.get("observed"), item.get("unit")),
+                "evidence": "visual_heuristic",
+                **(
+                    {"suggestion": IMPROVEMENT_TIPS.get(item["criterion"])}
+                    if item["status"] == "needs_review" else {}
+                ),
+            })
+        for item in block.get("observations_for_review", []):
+            measurements.append({
+                "label": item["label"],
+                "phase": PHASE_LABELS.get(item.get("phase"), item.get("phase")),
+                "value": _display_value(item.get("observed"), item.get("unit")),
+                "note": "Số liệu tham khảo, chưa dùng để kết luận đúng hoặc sai.",
+            })
+        for item in block.get("not_assessed", []):
+            unavailable.append({
+                "label": item["label"],
+                "phase": PHASE_LABELS.get(item.get("phase"), item.get("phase")),
+                "value": _display_value(item.get("observed"), item.get("unit")),
+                "reason": item["reason"],
+            })
+
+    motion = quality.get("motion_proposals", [])
+    peak_time = motion[0].get("peak_time") if motion else None
+    predicted_label = (
+        TECHNIQUE_LABELS.get(classifier.get("label"), classifier.get("label"))
+        if classifier else None
+    )
+    classifier_confidence = (
+        round(float(classifier["confidence"]) * 100, 2) if classifier else None
+    )
+    if classifier:
+        recognition_message = (
+            f"AI nhận diện {predicted_label} ({classifier_confidence:.2f}%), "
+            "trùng với kỹ thuật đã chọn."
+            if classifier.get("agreement_status") == "confirmed"
+            else f"AI nhận diện {predicted_label} ({classifier_confidence:.2f}%) "
+            "khác lựa chọn; hệ thống vẫn phân tích theo lựa chọn của bạn."
+            if classifier.get("agreement_status") == "conflict"
+            else f"AI chưa đủ tự tin; dự đoán cao nhất là {predicted_label} "
+            f"({classifier_confidence:.2f}%)."
+        )
+    else:
+        recognition_message = (
+            "Chưa chạy AI nhận diện; phân tích theo kỹ thuật người dùng đã chọn."
+        )
+    recognition = {
+        "status": classifier.get("agreement_status") if classifier else "not_run",
+        "message": recognition_message,
+        "prediction": predicted_label,
+        "confidence_percent": classifier_confidence,
+        "scores": classifier.get("scores") if classifier else None,
+    }
+    if quality.get("geometry_feasible"):
+        quality_message = "Video đủ chất lượng để phân tích hình học."
+    else:
+        quality_message = "Video chưa đủ chất lượng; hãy quay lại theo hướng dẫn."
+    return {
+        "version": 1,
+        "title": f"Kết quả phân tích {TECHNIQUE_LABELS[analysis['selection']['technique']]}",
+        "status": {
+            "code": analysis["overall"],
+            "label": {
+                "observable_good_signals": "Có dấu hiệu tốt quan sát được",
+                "review_available": "Đã phân tích — có nội dung cần xem lại",
+                "insufficient_video_quality": "Video chưa đủ chất lượng",
+                "insufficient_data": "Chưa đủ dữ liệu để phân tích",
+            }.get(analysis["overall"], "Đã phân tích"),
+        },
+        "technique": {
+            "selected": analysis["selection"]["technique"],
+            "label": TECHNIQUE_LABELS[analysis["selection"]["technique"]],
+            "view": analysis["selection"]["view"],
+            "view_label": VIEW_LABELS[analysis["selection"]["view"]],
+            "handedness": analysis["selection"]["handedness"],
+            "handedness_label": HAND_LABELS[analysis["selection"]["handedness"]],
+            "selected_by_user": True,
+        },
+        "recognition": recognition,
+        "video_quality": {
+            "passed": bool(quality.get("geometry_feasible")),
+            "message": quality_message,
+            "pose_valid_percent": round(
+                float(quality.get("trajectory_quality", {}).get("essential_valid_ratio", 0)) * 100,
+                2,
+            ),
+            "player_scale_px": round(
+                float(quality.get("trajectory_quality", {}).get("median_scale_px", 0)), 1
+            ),
+            "swing_peak_seconds": round(float(peak_time), 2) if peak_time is not None else None,
+            "issues": quality.get("reasons", []),
+        },
+        "summary": (
+            f"Quan sát được {len(observed)} dấu hiệu, có {len(needs_review)} điểm "
+            f"nên xem lại và {len(unavailable)} phép đo chưa thể kết luận."
+        ),
+        "observed_signals": observed,
+        "needs_review": needs_review,
+        "reference_measurements": measurements,
+        "not_assessed": unavailable,
+        "score": None,
+        "disclaimer": analysis["disclaimer"],
+    }
+
+
+def render_user_report_markdown(report: dict) -> str:
+    """Render the user payload as a readable Vietnamese handoff."""
+    technique = report["technique"]
+    quality = report["video_quality"]
+    recognition = report["recognition"]
+    lines = [
+        f"# {report['title']}", "",
+        f"**Trạng thái:** {report['status']['label']}", "",
+        f"- Kỹ thuật đã chọn: {technique['label']}",
+        f"- Góc quay: {technique['view_label']}",
+        f"- Tay thuận: {technique['handedness_label']}",
+        f"- AI nhận diện: {recognition['message']}",
+        f"- Chất lượng video: {quality['message']}",
+        f"- Pose hợp lệ: {quality['pose_valid_percent']:.2f}%",
+        f"- Swing peak: {quality['swing_peak_seconds']} giây"
+        if quality["swing_peak_seconds"] is not None else "- Swing peak: chưa xác định",
+        "", report["summary"], "",
+    ]
+    sections = (
+        ("Dấu hiệu quan sát được", report["observed_signals"], "message"),
+        ("Điểm cần xem lại", report["needs_review"], "message"),
+        ("Số liệu tham khảo", report["reference_measurements"], "note"),
+        ("Chưa thể đánh giá", report["not_assessed"], "reason"),
+    )
+    for title, items, message_key in sections:
+        lines.extend([f"## {title}", ""])
+        if not items:
+            lines.extend(["Không có.", ""])
+            continue
+        for item in items:
+            details = []
+            if item.get("phase"):
+                details.append(str(item["phase"]))
+            if item.get("value"):
+                details.append(str(item["value"]))
+            suffix = f" ({'; '.join(details)})" if details else ""
+            lines.append(f"- **{item['label']}**{suffix}: {item[message_key]}")
+            if item.get("suggestion"):
+                lines.append(f"  Gợi ý: {item['suggestion']}")
+        lines.append("")
+    lines.extend(["---", "", report["disclaimer"], ""])
+    return "\n".join(lines)
 
 
 def assemble_analysis(
@@ -300,12 +500,27 @@ def main() -> None:
     analysis["artifacts"]["classification"] = (
         str(classifier_path) if classifier_suggestion is not None else None
     )
+    user_report = build_user_report(analysis)
+    user_report_json_path = output_dir / "user_report.json"
+    user_report_markdown_path = output_dir / "user_report.md"
+    user_report_json_path.write_text(
+        json.dumps(user_report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    user_report_markdown_path.write_text(
+        render_user_report_markdown(user_report), encoding="utf-8"
+    )
+    analysis["artifacts"]["user_report_json"] = str(user_report_json_path)
+    analysis["artifacts"]["user_report_markdown"] = str(
+        user_report_markdown_path
+    )
     analysis_path = output_dir / "analysis.json"
     analysis_path.write_text(
         json.dumps(analysis, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     print(f"Analysis complete: {analysis_path}")
+    print(f"User report: {user_report_markdown_path}")
     print(f"Overall: {analysis['overall']}  score: none")
 
 
