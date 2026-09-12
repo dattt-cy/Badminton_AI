@@ -23,11 +23,17 @@ def test_assembled_report_preserves_user_selection_over_classifier():
         technique="forehand_clear", view="side", handedness="right",
         pose_config=Path("pose.yaml"), quality={"geometry_feasible": True},
         technique_report=technique_report, preview=None,
-        classifier_suggestion={"label": "backhand_drive", "confidence": 0.9},
+        classifier_suggestion={
+            "label": "backhand_drive", "confidence": 0.9, "accepted": True
+        },
     )
 
     assert result["selection"]["technique"] == "forehand_clear"
     assert not result["selection"]["classifier_used_for_rules"]
+    assert result["classifier_suggestion"]["agreement_status"] == "conflict"
+    assert not result["classifier_suggestion"]["used_for_rules"]
+    assert "giữ lựa chọn người dùng" in result["user_summary"]["recognition"]
+    assert result["user_summary"]["counts"]["validated_good_signals"] == 0
     assert result["overall"] == "review_available"
     assert result["score"] is None
 

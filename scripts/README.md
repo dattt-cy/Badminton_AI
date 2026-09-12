@@ -163,7 +163,7 @@ the score-free user report with one command:
 ```powershell
 python scripts/inference/analyze_technique.py `
   "C:\Users\ADMIN\Downloads\stroke.mp4" forehand_clear `
-  --view side --handedness right
+  --view side --handedness right --run-classifier-wsl
 ```
 
 The default output is `outputs/<video>_analysis/` with `pose.npz`,
@@ -172,6 +172,9 @@ The default output is `outputs/<video>_analysis/` with `pose.npz`,
 `--no-preview` to skip rendering. Technique, view, and handedness are
 user-confirmed; an optional `--classifier-json` is recorded as a suggestion
 and never selects the rule set.
+The WSL option uses the two-class motion-onset checkpoint by default and
+writes `classification.json`. `analysis.json` exposes a compact `user_summary`
+alongside the complete technical report.
 
 ## Model workflows
 

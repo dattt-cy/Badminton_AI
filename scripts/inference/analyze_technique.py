@@ -52,6 +52,69 @@ def assemble_analysis(
         overall = "observable_good_signals"
     else:
         overall = "review_available"
+    classifier = dict(classifier_suggestion) if classifier_suggestion else None
+    if classifier is not None:
+        classifier["used_for_rules"] = False
+        classifier["agrees_with_user_selection"] = (
+            classifier.get("label") == technique
+        )
+        classifier["agreement_status"] = (
+            "confirmed" if classifier.get("accepted")
+            and classifier["agrees_with_user_selection"]
+            else "conflict" if classifier.get("accepted")
+            and not classifier["agrees_with_user_selection"]
+            else "uncertain"
+        )
+        classifier["message"] = (
+            "AI nhận diện trùng với kỹ thuật người dùng đã chọn."
+            if classifier["agreement_status"] == "confirmed"
+            else "AI nhận diện khác lựa chọn người dùng; hệ thống giữ lựa chọn người dùng."
+            if classifier["agreement_status"] == "conflict"
+            else "AI chưa đủ tự tin để xác nhận kỹ thuật."
+        )
+    good_count = sum(len(item.get("good_signals", [])) for item in feedback)
+    review_count = sum(
+        len(item.get("observations_for_review", [])) for item in feedback
+    )
+    heuristic_items = [
+        criterion for item in feedback
+        for criterion in item.get("heuristic_observations", [])
+    ]
+    unavailable_count = sum(len(item.get("not_assessed", [])) for item in feedback)
+    technique_label = {
+        "forehand_clear": "Forehand clear",
+        "backhand_drive": "Backhand drive",
+    }[technique]
+    user_summary = {
+        "technique": technique_label,
+        "recognition": (
+            classifier["message"] if classifier is not None
+            else "Chưa chạy classifier; dùng kỹ thuật người dùng đã chọn."
+        ),
+        "video_quality": (
+            "Video đủ chất lượng để phân tích hình học."
+            if quality.get("geometry_feasible", False)
+            else "Video chưa đủ chất lượng để phân tích hình học."
+        ),
+        "assessment": (
+            "Có một số dấu hiệu tốt đã được kiểm định."
+            if overall == "observable_good_signals"
+            else "Có số liệu và quan sát để người dùng xem lại."
+            if overall == "review_available"
+            else "Chưa đủ dữ liệu để đưa ra quan sát kỹ thuật."
+        ),
+        "counts": {
+            "validated_good_signals": good_count,
+            "measurements_for_review": review_count,
+            "heuristic_observed": sum(
+                item.get("status") == "observed" for item in heuristic_items
+            ),
+            "heuristic_needs_review": sum(
+                item.get("status") == "needs_review" for item in heuristic_items
+            ),
+            "not_assessed": unavailable_count,
+        },
+    }
     return {
         "version": 1,
         "mode": "experimental_phone_video_geometry_preview",
@@ -63,7 +126,8 @@ def assemble_analysis(
             "source": "user_confirmed",
             "classifier_used_for_rules": False,
         },
-        "classifier_suggestion": classifier_suggestion,
+        "classifier_suggestion": classifier,
+        "user_summary": user_summary,
         "overall": overall,
         "score": None,
         "quality": quality,
@@ -106,6 +170,25 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--swing-peak-frame", type=int)
     parser.add_argument("--classifier-json", type=Path)
+    parser.add_argument(
+        "--run-classifier-wsl", action="store_true",
+        help="Run the 2-class motion-onset classifier on the extracted pose",
+    )
+    parser.add_argument(
+        "--classifier-checkpoint", type=Path,
+        default=Path(
+            "models/checkpoints/action_recognition/"
+            "stgcnpp_manual_clips_2class_motion_onset_best.pth"
+        ),
+    )
+    parser.add_argument(
+        "--classifier-config", type=Path,
+        default=Path(
+            "configs/action_recognition/experiments/"
+            "stgcnpp_manual_clips_2class_motion_onset.py"
+        ),
+    )
+    parser.add_argument("--min-action-confidence", type=float, default=0.75)
     parser.add_argument("--force-pose", action="store_true")
     parser.add_argument("--no-preview", action="store_true")
     return parser.parse_args()
@@ -181,16 +264,41 @@ def main() -> None:
             technique_report["_path"] = str(report_path)
 
     classifier_suggestion = None
-    if args.classifier_json:
+    classifier_path = output_dir / "classification.json"
+    if args.run_classifier_wsl:
+        checkpoint = (
+            args.classifier_checkpoint if args.classifier_checkpoint.is_absolute()
+            else repo_root / args.classifier_checkpoint
+        ).resolve()
+        classifier_config = (
+            args.classifier_config if args.classifier_config.is_absolute()
+            else repo_root / args.classifier_config
+        ).resolve()
+        run_command([
+            "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-File", str(repo_root / "scripts/inference/classify_action_wsl.ps1"),
+            "-InputPath", str(pose),
+            "-Checkpoint", str(checkpoint),
+            "-ActionConfig", str(classifier_config),
+            "-Target", args.target,
+            "-MinActionConfidence", str(args.min_action_confidence),
+            "-JsonOutputPath", str(classifier_path),
+        ], cwd=repo_root)
+        classifier_suggestion = json.loads(
+            classifier_path.read_text(encoding="utf-8")
+        )
+    elif args.classifier_json:
         classifier_path = args.classifier_json.resolve()
         classifier_suggestion = json.loads(classifier_path.read_text(encoding="utf-8"))
-        classifier_suggestion["used_for_rules"] = False
 
     analysis = assemble_analysis(
         video=video, pose=pose, technique=args.technique, view=args.view,
         handedness=args.handedness, pose_config=pose_config, quality=quality,
         technique_report=technique_report, preview=preview,
         classifier_suggestion=classifier_suggestion,
+    )
+    analysis["artifacts"]["classification"] = (
+        str(classifier_path) if classifier_suggestion is not None else None
     )
     analysis_path = output_dir / "analysis.json"
     analysis_path.write_text(

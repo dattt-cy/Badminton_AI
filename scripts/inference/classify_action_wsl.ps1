@@ -2,9 +2,9 @@ param(
     [Parameter(Mandatory = $true, Position = 0)]
     [string]$InputPath,
 
-    [string]$Checkpoint = "models/checkpoints/action_recognition/best_top1_acc_3class.pth",
+    [string]$Checkpoint = "models/checkpoints/action_recognition/stgcnpp_manual_clips_2class_motion_onset_best.pth",
 
-    [string]$ActionConfig = "configs/action_recognition/experiments/stgcnpp_multisense_3class.py",
+    [string]$ActionConfig = "configs/action_recognition/experiments/stgcnpp_manual_clips_2class_motion_onset.py",
 
     [ValidateSet("single", "far", "near", "any")]
     [string]$Target = "single",
@@ -13,7 +13,11 @@ param(
     [double]$MinActionConfidence = 0.75,
 
     [ValidateRange(0.1, 30.0)]
-    [double]$WindowSeconds = 3.5
+    [double]$WindowSeconds = 3.5,
+
+    [string]$PoseOutputPath,
+
+    [string]$JsonOutputPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,26 +51,50 @@ $checkpointWsl = ConvertTo-WslPath $resolvedCheckpoint
 $actionConfigWsl = ConvertTo-WslPath $resolvedActionConfig
 $python = "/home/victomblack1602/miniforge3/envs/badminton-pyskl/bin/python"
 $safeStem = [IO.Path]::GetFileNameWithoutExtension($resolvedInput) -replace '[^A-Za-z0-9_-]', '_'
-$poseOutput = "outputs/${safeStem}_pose.npz"
-$jsonOutput = "outputs/${safeStem}_prediction.json"
+$resolvedJsonOutput = if ($JsonOutputPath) {
+    [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($JsonOutputPath)) {
+        $JsonOutputPath
+    } else {
+        Join-Path $repoRoot $JsonOutputPath
+    }))
+} else {
+    Join-Path $repoRoot "outputs/${safeStem}_prediction.json"
+}
+$resolvedPoseOutput = if ($PoseOutputPath) {
+    [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($PoseOutputPath)) {
+        $PoseOutputPath
+    } else {
+        Join-Path $repoRoot $PoseOutputPath
+    }))
+} else {
+    Join-Path $repoRoot "outputs/${safeStem}_pose.npz"
+}
+New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($resolvedJsonOutput)) | Out-Null
+$jsonOutputWsl = ConvertTo-WslPath $resolvedJsonOutput
+$classifierArgs = @(
+    "-d", "Ubuntu", "--cd", $repoWsl, "--exec", "env",
+    "LD_LIBRARY_PATH=/usr/lib/wsl/lib", $python,
+    "scripts/inference/classify_action.py", $inputWsl,
+    "--checkpoint", $checkpointWsl,
+    "--action-config", $actionConfigWsl,
+    "--target", $Target,
+    "--device", "cuda:0",
+    "--min-action-confidence", "$MinActionConfidence",
+    "--window-seconds", "$WindowSeconds",
+    "--json-output", $jsonOutputWsl
+)
+if ([IO.Path]::GetExtension($resolvedInput).ToLowerInvariant() -ne ".npz") {
+    New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($resolvedPoseOutput)) | Out-Null
+    $classifierArgs += @("--pose-output", (ConvertTo-WslPath $resolvedPoseOutput))
+}
 
-& wsl.exe -d Ubuntu --cd $repoWsl --exec env `
-    LD_LIBRARY_PATH=/usr/lib/wsl/lib `
-    $python `
-    scripts/inference/classify_action.py `
-    $inputWsl `
-    --checkpoint $checkpointWsl `
-    --action-config $actionConfigWsl `
-    --target $Target `
-    --device cuda:0 `
-    --min-action-confidence $MinActionConfidence `
-    --window-seconds $WindowSeconds `
-    --pose-output $poseOutput `
-    --json-output $jsonOutput
+& wsl.exe @classifierArgs
 
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-Write-Host "Pose: $repoRoot\$($poseOutput -replace '/', '\')"
-Write-Host "Prediction: $repoRoot\$($jsonOutput -replace '/', '\')"
+if ([IO.Path]::GetExtension($resolvedInput).ToLowerInvariant() -ne ".npz") {
+    Write-Host "Pose: $resolvedPoseOutput"
+}
+Write-Host "Prediction: $resolvedJsonOutput"
