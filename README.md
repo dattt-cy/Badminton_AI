@@ -9,23 +9,39 @@ Pipeline AI phan tich ky thuat cau long tu video:
 5. Error detection: phat hien loi theo tung dong tac va tung pha.
 6. RAG: truy xuat tai lieu va tao huong dan khac phuc.
 
-## Cau truc
+## Cau truc du an
 
 ```text
-configs/                 Cau hinh cho tung thanh phan
-data/                    Du lieu tho, nhan va du lieu da xu ly
-docs/                    Tai lieu thiet ke va quy uoc du lieu
-external/pyskl/          Ma nguon PySKL doc lap
-models/                  Checkpoint va model export
-notebooks/               Thu nghiem, khao sat du lieu
-outputs/                 Ket qua inference, log va visualization
-scripts/                 Lenh chay theo tung cong doan
-src/ai_classifier/       Ma nguon chinh cua he thong AI
-tests/                   Kiem thu
+configs/
+  action_recognition/
+    datasets/            Cau hinh tao tung bo du lieu
+    experiments/         Cau hinh train/evaluate ST-GCN++
+  biomechanics/          Registry, rule va reference theo ky thuat
+  pose/                   Preset trich xuat pose
+data/                     Du lieu theo vong doi raw -> interim -> processed
+docs/                     Thiet ke, quy uoc va huong dan mo rong
+external/pyskl/           Git submodule cua dependency PySKL
+models/checkpoints/       Trong so pose va action recognition
+models/exports/           Model da dong goi de deploy
+notebooks/                Thu nghiem va Colab entry point
+outputs/                  Ket qua inference, log va visualization (generated)
+scripts/
+  data/augmentation/      Tao bien the va materialize mau
+  data/datasets/          Xay dung, migrate va kiem ke dataset
+  data/export/            Xuat PySKL va feature table
+  data/pose/              Trich pose hang loat
+  data/references/        Chon mau va xay reference profile
+  evaluation/             Audit va cham ky thuat
+  inference/              CLI suy luan
+  training/               Wrapper huan luyen
+src/ai_classifier/        Ma nguon tai su dung, chia theo domain
+tests/unit/               Unit test mirror domain trong src va scripts
 ```
 
 PySKL trong `external/pyskl` la dependency tham khao/baseline. Code du an
 khong nen sua truc tiep trong thu muc nay neu khong that su can thiet.
+Quy uoc chi tiet nam trong `docs/project_structure.md`; danh muc cac lenh chay
+nam trong `scripts/README.md`.
 
 ## Trich xuat pose bang YOLOv8
 
@@ -41,8 +57,8 @@ Chay pose estimation tren video:
 python scripts/inference/extract_pose.py data/raw/sample.mp4 outputs/sample_pose.npz
 ```
 
-Lan chay dau tien, Ultralytics se tai checkpoint `yolov8n-pose.pt`. File dau
-ra chua tensor `keypoints` co shape `(T, 17, 3)` theo thu tu `(x, y,
+Checkpoint YOLO duoc luu trong `models/checkpoints/pose/`, khong dat o root.
+File dau ra chua tensor `keypoints` co shape `(T, 17, 3)` theo thu tu `(x, y,
 confidence)` va metadata gom FPS, chieu rong, chieu cao video. Neu mot frame
 khong phat hien duoc nguoi, pose cua frame do duoc dien bang 0.
 
@@ -56,9 +72,9 @@ Tao video preview co skeleton:
 python scripts/inference/render_pose.py data/raw/sample.mp4 outputs/sample_pose.npz outputs/sample_pose_preview.mp4
 ```
 
-Khi trich pose de xay reference hoac cham diem hinh hoc, dung preset do chinh
-xac cao. Preset nay loai pose spike bang Hampel, noi suy chi cac gap ngan, sau
-do loc Butterworth zero-phase theo tan so 6 Hz de khong dich thoi diem contact:
+Khi trich pose de xay reference hoac cham diem hinh hoc, co the dung preset do
+chinh xac cao. Reference va video can cham phai duoc trich bang cung model va
+cung cau hinh smoothing de tranh distribution shift:
 
 ```bash
 python scripts/inference/extract_pose.py data/raw/sample.mp4 outputs/sample_pose.npz \
@@ -70,14 +86,42 @@ doc anh huong xuong ben phai la goc duong) va truyen cung quy uoc khi xay
 reference va khi cham video. Vi du:
 
 ```bash
-python scripts/data/build_reference_profiles.py forehand_lift --view front \
+python scripts/data/references/build_reference_profiles.py forehand_lift --view front \
   --floor-angle-degrees 3.5
 python scripts/evaluation/check_technique_rules.py outputs/sample_pose.npz \
   forehand_lift --floor-angle-degrees 3.5
 ```
 
-Khong dung preset geometry cho checkpoint action-recognition da train bang
-EMA neu chua train lai, vi thay doi preprocessing tao ra distribution shift.
+Khong doi preprocessing cua checkpoint action-recognition neu chua train lai,
+vi thay doi dau vao co the tao distribution shift.
+
+Khi cham hinh hoc, bat buoc chon mot camera view co dinh cho ca clip. He thong
+khong suy camera view tu do rong vai, vi van dong vien co the xoay than trong
+luc danh. Co the dung frame swing peak da gan nhan thu cong cho clip mot stroke:
+
+```bash
+python scripts/evaluation/check_technique_rules.py outputs/sample_pose.npz \
+  forehand_clear --view front --swing-peak-frame 46 \
+  --output outputs/sample_geometry.json
+```
+
+Bao cao gom elbow-extension delta, wrist path/excursion, balance proxy, ty le
+thoi gian tung pha va cac nhom `strengths`, `needs_review`,
+`insufficient_data`. De danh gia tren bo nhan thu cong, sao che
+`configs/biomechanics/geometry_validation_template.csv` va chay:
+
+```bash
+python scripts/evaluation/validate_geometry_reports.py labels.csv \
+  --output outputs/geometry_validation.json
+```
+
+Sau khi them cac chi so tong hop, co the cap nhat rieng vung tham chieu moi ma
+khong thay doi cac nguong rule da duoc duyet:
+
+```bash
+python scripts/data/references/build_reference_profiles.py forehand_clear \
+  --view side --summary-only
+```
 
 ## Chuan bi dataset ST-GCN
 
@@ -85,22 +129,22 @@ Trich xuat skeleton cho toan bo dataset. Video `match` tu dong chon nguoi o
 san xa; video `single_player` chon nguoi duy nhat:
 
 ```bash
-python scripts/data/extract_dataset_poses.py
+python scripts/data/pose/extract_dataset_poses.py
 ```
 
 Lenh co the chay lai de tiep tuc vi cac file da xu ly se duoc bo qua. Sau khi
 extract xong, xuat annotation dung format PySKL:
 
 ```bash
-python scripts/data/export_pyskl.py
+python scripts/data/export/export_pyskl.py
 ```
 
 Xoay va scale du lieu duoc cau hinh de augmentation skeleton trong luc train,
 khong nhan ban video vat ly. Cau hinh dataset nam tai
-`configs/action_recognition/dataset.yaml`.
+`configs/action_recognition/datasets/dataset.yaml`.
 
 Config train ST-GCN++ 2 lop nam tai
-`configs/action_recognition/stgcnpp_badminton.py`. Hai lop gom
+`configs/action_recognition/experiments/stgcnpp_badminton.py`. Hai lop gom
 `backhand_drive` va `forehand_lift`. Pipeline train tu dong tao
 rotation khoang +/-6.9 do va scale +/-10% moi epoch; validation va test khong
 augmentation.
@@ -114,7 +158,7 @@ co ro ri du lieu. Bo du lieu sach hien co 83 train, 17 validation va 19 test.
 Co the kiem tra pipeline co hoc dung nhan bang bo sanity 10 mau:
 
 ```bash
-python scripts/data/create_overfit_subset.py \
+python scripts/data/datasets/create_overfit_subset.py \
   data/annotations/badminton_actions_2class.pkl \
   data/annotations/badminton_overfit_10.pkl
 ```

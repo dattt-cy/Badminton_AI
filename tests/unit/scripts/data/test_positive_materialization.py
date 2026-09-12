@@ -1,7 +1,9 @@
 import numpy as np
 
 from ai_classifier.biomechanics import GeometryFeatures
-from scripts.data.materialize_3class_positives import stroke_motion_rejection_reason
+from scripts.data.augmentation.materialize_3class_positives import (
+    stroke_motion_rejection_reason,
+)
 
 
 def _features(wrist_speed, wrist_height, wrist_distance, elbow, shoulder):

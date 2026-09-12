@@ -22,14 +22,19 @@ data/processed/*
 data/manual_clips/
 data/multisense/
 data/expert_reference/
-models/checkpoints/*
-models/exports/*
+models/checkpoints/**
+models/exports/**
 outputs/*
 work_dirs/
 docs/*.pdf
 
 # Keep directory structure
 !**/.gitkeep
+!models/checkpoints/
+!models/checkpoints/**/
+!models/checkpoints/**/.gitkeep
+!models/exports/
+!models/exports/**/.gitkeep
 
 # Common ML artifacts
 *.pt

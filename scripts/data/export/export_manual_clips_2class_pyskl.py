@@ -152,7 +152,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("configs/action_recognition/dataset_manual_clips_2class.yaml"),
+        default=Path(
+            "configs/action_recognition/datasets/dataset_manual_clips_2class.yaml"
+        ),
     )
     parser.add_argument("--output", type=Path)
     return parser.parse_args()

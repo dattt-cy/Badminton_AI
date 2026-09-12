@@ -17,12 +17,12 @@ from ai_classifier.pose import PoseSequence
 from ai_classifier.segmentation import find_motion_proposals
 
 try:
-    from scripts.data.augment_manual_clips_temporal import (
+    from scripts.data.augmentation.augment_manual_clips_temporal import (
         VIDEO_EXTENSIONS,
         load_pose,
         validate_output_roots,
     )
-except ImportError:  # Direct execution adds scripts/data rather than the repo root.
+except ImportError:  # Direct execution adds this script directory to sys.path.
     from augment_manual_clips_temporal import (
         VIDEO_EXTENSIONS,
         load_pose,

@@ -1,6 +1,6 @@
 import csv
 
-from scripts.data.materialize_3class_background import main
+from scripts.data.augmentation.materialize_3class_background import main
 
 
 FIELDS = (

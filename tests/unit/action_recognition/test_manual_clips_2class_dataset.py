@@ -3,8 +3,8 @@ from pathlib import Path
 
 import numpy as np
 
-from scripts.data.export_manual_clips_2class_pyskl import export_dataset
-from scripts.data.extract_manual_clips_poses import discover_jobs
+from scripts.data.export.export_manual_clips_2class_pyskl import export_dataset
+from scripts.data.pose.extract_manual_clips_poses import discover_jobs
 
 
 def _write_pose(path: Path, confidence: float = 0.9, frames: int = 40) -> None:

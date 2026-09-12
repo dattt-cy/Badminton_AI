@@ -51,7 +51,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("configs/action_recognition/dataset_manual_clips_2class.yaml"),
+        default=Path(
+            "configs/action_recognition/datasets/dataset_manual_clips_2class.yaml"
+        ),
     )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--limit", type=int)
@@ -100,9 +102,15 @@ def main() -> None:
     if not jobs:
         return
 
-    model = YOLO(str(config.get("model", "yolov8n-pose.pt")))
+    model = YOLO(
+        str(config.get("model", "models/checkpoints/pose/yolov8n-pose.pt"))
+    )
     smoothing = config.get("smoothing", {})
-    smoother = KeypointSmoother.from_config(smoothing)
+    smoother = KeypointSmoother(
+        alpha=float(smoothing.get("alpha", 0.35)),
+        min_confidence=float(smoothing.get("min_confidence", 0.30)),
+        max_gap=int(smoothing.get("max_gap", 4)),
+    )
     device = args.device if args.device is not None else config.get("device")
 
     failures: list[tuple[Path, str]] = []

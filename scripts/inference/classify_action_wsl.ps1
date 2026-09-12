@@ -4,7 +4,7 @@ param(
 
     [string]$Checkpoint = "models/checkpoints/action_recognition/best_top1_acc_3class.pth",
 
-    [string]$ActionConfig = "configs/action_recognition/stgcnpp_multisense_3class.py",
+    [string]$ActionConfig = "configs/action_recognition/experiments/stgcnpp_multisense_3class.py",
 
     [ValidateSet("single", "far", "near", "any")]
     [string]$Target = "single",

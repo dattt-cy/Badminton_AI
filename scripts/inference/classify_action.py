@@ -28,7 +28,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--action-config",
         type=Path,
-        default=Path("configs/action_recognition/stgcnpp_multisense_3class.py"),
+        default=Path(
+            "configs/action_recognition/experiments/stgcnpp_multisense_3class.py"
+        ),
     )
     parser.add_argument(
         "--pose-config",
@@ -95,7 +97,9 @@ def extract_pose(video: Path, config_path: Path, target: str) -> PoseSequence:
     with config_path.open("r", encoding="utf-8") as config_file:
         config = yaml.safe_load(config_file) or {}
     estimator = YOLOv8PoseEstimator(
-        model_path=config.get("model", "yolov8n-pose.pt"),
+        model_path=config.get(
+            "model", "models/checkpoints/pose/yolov8n-pose.pt"
+        ),
         confidence=float(config.get("confidence", 0.25)),
         image_size=int(config.get("image_size", 640)),
         device=config.get("device"),
@@ -107,7 +111,11 @@ def extract_pose(video: Path, config_path: Path, target: str) -> PoseSequence:
     sequence = estimator.extract(video)
     smoothing = config.get("smoothing", {})
     if smoothing.get("enabled", True):
-        sequence = KeypointSmoother.from_config(smoothing).smooth(sequence)
+        sequence = KeypointSmoother(
+            alpha=float(smoothing.get("alpha", 0.35)),
+            min_confidence=float(smoothing.get("min_confidence", 0.3)),
+            max_gap=int(smoothing.get("max_gap", 4)),
+        ).smooth(sequence)
     return sequence
 
 

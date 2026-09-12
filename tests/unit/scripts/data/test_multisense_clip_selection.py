@@ -2,7 +2,10 @@ import importlib.util
 from pathlib import Path
 
 
-SCRIPT = Path(__file__).parents[2] / "scripts/data/cut_multisense_reference_clips.py"
+SCRIPT = (
+    Path(__file__).parents[4]
+    / "scripts/data/datasets/cut_multisense_reference_clips.py"
+)
 SPEC = importlib.util.spec_from_file_location("cut_multisense_reference_clips", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None

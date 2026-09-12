@@ -24,6 +24,7 @@ from ai_classifier.biomechanics import (
     extract_geometry_features,
     extract_kinetic_chain_timing,
     load_technique_registry,
+    summarize_stroke_geometry,
 )
 from ai_classifier.error_detection import phase_feature_value
 from ai_classifier.pose import PoseSequence
@@ -80,6 +81,11 @@ def parse_args() -> argparse.Namespace:
         "--pending-review", action="store_true",
         help="Force a provisional profile when clips have only automatic quality review.",
     )
+    parser.add_argument(
+        "--summary-only", action="store_true",
+        help="Preserve existing rule thresholds and add/update stroke summary ranges "
+        "using exactly the profile's existing clips_used.",
+    )
     return parser.parse_args()
 
 
@@ -133,6 +139,16 @@ def main() -> None:
 
     rule_specs = technique.rules
     rule_samples: dict[str, list[float]] = {rule.name: [] for rule in rule_specs}
+    summary_samples: dict[str, list[float]] = {
+        "elbow_extension_delta": [],
+        "wrist_path_length": [],
+        "wrist_vertical_excursion": [],
+        "balance_offset_preparation": [],
+        "phase_duration_ratio.preparation": [],
+        "phase_duration_ratio.backswing": [],
+        "phase_duration_ratio.forward_swing": [],
+        "phase_duration_ratio.follow_through": [],
+    }
 
     # Pass 1: load every clip and rank by pixel scale (mục 9.1 quality gate).
     loaded: list[tuple[Path, PoseSequence, float]] = []
@@ -140,6 +156,50 @@ def main() -> None:
         sequence = load_pose(clip_path)
         scale_px = estimate_pose_scale_px(sequence)
         loaded.append((clip_path, sequence, scale_px))
+
+    if args.summary_only:
+        if not output_path.exists():
+            raise FileNotFoundError(f"Cannot update missing reference profile: {output_path}")
+        document = yaml.safe_load(output_path.read_text(encoding="utf-8"))
+        existing_clips = set(document.get("clips_used", []))
+        selected = [
+            item for item in loaded
+            if item[0].name in existing_clips
+            or item[0].relative_to(pose_dir).as_posix() in existing_clips
+        ]
+        found = {
+            item[0].name for item in selected
+        } | {
+            item[0].relative_to(pose_dir).as_posix() for item in selected
+        }
+        missing = existing_clips - found
+        if missing:
+            raise FileNotFoundError(f"Existing reference clips not found: {sorted(missing)}")
+        summary_samples = _collect_summary_samples(
+            selected, args.handedness, args.floor_angle_degrees
+        )
+        summary_ranges = build_range_checks(
+            summary_samples, buffer_ratio=args.buffer_ratio
+        )
+        document["stroke_summary_ranges"] = {
+            name: {
+                "low": check.low,
+                "high": check.high,
+                "buffer_ratio": check.buffer_ratio,
+                "sample_count": len(summary_samples[name]),
+            }
+            for name, check in summary_ranges.items()
+        }
+        policies = {rule.name: rule.orientation_requirement for rule in rule_specs}
+        for name, rule in document.get("rules", {}).items():
+            rule["orientation_requirement"] = policies.get(name, "aligned")
+        with output_path.open("w", encoding="utf-8") as output_file:
+            yaml.safe_dump(document, output_file, allow_unicode=True, sort_keys=False)
+        print(
+            f"Updated summary ranges in {output_path} from "
+            f"{len(selected)} existing reference clips; rule thresholds preserved."
+        )
+        return
 
     eligible = []
     quality_by_path = {}
@@ -190,6 +250,21 @@ def main() -> None:
             continue
         phase_valid_count += 1
         clips_used.append(clip_path.relative_to(pose_dir).as_posix())
+        summary = summarize_stroke_geometry(features, phases)
+        summary_values = {
+            "elbow_extension_delta": summary.elbow_extension_delta,
+            "wrist_path_length": summary.wrist_path_length,
+            "wrist_vertical_excursion": summary.wrist_vertical_excursion,
+            "balance_offset_preparation": summary.balance_offset_preparation,
+            **{
+                f"phase_duration_ratio.{name}": value
+                for name, value in summary.phase_duration_ratios.items()
+                if name != "contact_estimated"
+            },
+        }
+        for name, value in summary_values.items():
+            if np.isfinite(value):
+                summary_samples[name].append(float(value))
         for rule in rule_specs:
             if rule.feature not in features.names or not hasattr(phases, rule.phase):
                 raise ValueError(
@@ -221,6 +296,7 @@ def main() -> None:
         raise RuntimeError("No rule produced a reference range; check phase detection and pose quality.")
 
     chain_reference = build_kinetic_chain_reference(timings, buffer_ratio=args.buffer_ratio)
+    summary_ranges = build_range_checks(summary_samples, buffer_ratio=args.buffer_ratio)
     document = {
         "technique": args.technique,
         "view": args.view,
@@ -241,6 +317,15 @@ def main() -> None:
             name: {"low": check.low, "high": check.high, "buffer_ratio": check.buffer_ratio}
             for name, check in rule_ranges.items()
         },
+        "stroke_summary_ranges": {
+            name: {
+                "low": check.low,
+                "high": check.high,
+                "buffer_ratio": check.buffer_ratio,
+                "sample_count": len(summary_samples[name]),
+            }
+            for name, check in summary_ranges.items()
+        },
         "rules": {
             rule.name: {
                 "feature": rule.feature,
@@ -253,6 +338,7 @@ def main() -> None:
                 "min_valid_frames": rule.min_valid_frames,
                 "min_valid_ratio": rule.min_valid_ratio,
                 "compatible_views": list(rule.compatible_views),
+                "orientation_requirement": rule.orientation_requirement,
             }
             for rule in rule_specs
             if rule.name in rule_ranges
@@ -266,6 +352,48 @@ def main() -> None:
     with output_path.open("w", encoding="utf-8") as output_file:
         yaml.safe_dump(document, output_file, allow_unicode=True, sort_keys=False)
     print(f"Wrote reference profile: {output_path}")
+
+
+def _collect_summary_samples(
+    selected: list[tuple[Path, PoseSequence, float]],
+    handedness: str,
+    floor_angle_degrees: float,
+) -> dict[str, list[float]]:
+    samples: dict[str, list[float]] = {
+        "elbow_extension_delta": [],
+        "wrist_path_length": [],
+        "wrist_vertical_excursion": [],
+        "balance_offset_preparation": [],
+        "phase_duration_ratio.preparation": [],
+        "phase_duration_ratio.backswing": [],
+        "phase_duration_ratio.forward_swing": [],
+        "phase_duration_ratio.follow_through": [],
+    }
+    for _, sequence, _ in selected:
+        features = extract_geometry_features(
+            sequence,
+            handedness=handedness,
+            floor_angle_degrees=floor_angle_degrees,
+        )
+        phases = detect_stroke_phases(features)
+        if not phases.valid:
+            continue
+        summary = summarize_stroke_geometry(features, phases)
+        values = {
+            "elbow_extension_delta": summary.elbow_extension_delta,
+            "wrist_path_length": summary.wrist_path_length,
+            "wrist_vertical_excursion": summary.wrist_vertical_excursion,
+            "balance_offset_preparation": summary.balance_offset_preparation,
+            **{
+                f"phase_duration_ratio.{name}": value
+                for name, value in summary.phase_duration_ratios.items()
+                if name != "contact_estimated"
+            },
+        }
+        for name, value in values.items():
+            if np.isfinite(value):
+                samples[name].append(float(value))
+    return samples
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@ dataset_root: data/manual_clips
 pose_output_root: data/processed/manual_clips_2class_poses
 annotation_output: data/annotations/manual_clips_2class.pkl
 
-model: yolov8n-pose.pt
+model: models/checkpoints/pose/yolov8n-pose.pt
 device: null
 
 classes:

@@ -1,4 +1,4 @@
-model: yolov8n-pose.pt
+model: models/checkpoints/pose/yolov8n-pose.pt
 confidence: 0.25
 image_size: 640
 device: null

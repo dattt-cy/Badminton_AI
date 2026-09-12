@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.data.augment_manual_clips_temporal import (
+from scripts.data.augmentation.augment_manual_clips_temporal import (
     AugmentationJob,
     output_relative_path,
     select_balanced_jobs,

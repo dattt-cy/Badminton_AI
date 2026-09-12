@@ -16,7 +16,7 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("configs/action_recognition/dataset.yaml"),
+        default=Path("configs/action_recognition/datasets/dataset.yaml"),
     )
     args = parser.parse_args()
     with args.config.open("r", encoding="utf-8") as config_file:

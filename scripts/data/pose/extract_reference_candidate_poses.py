@@ -39,14 +39,20 @@ def main() -> None:
 
     config = yaml.safe_load(args.config.read_text(encoding="utf-8")) or {}
     estimator = YOLOv8PoseEstimator(
-        model_path=config.get("model", "yolov8n-pose.pt"),
+        model_path=config.get(
+            "model", "models/checkpoints/pose/yolov8n-pose.pt"
+        ),
         confidence=float(config.get("confidence", 0.25)),
         image_size=int(config.get("image_size", 640)),
         device=config.get("device"),
         target_region="single",
     )
     smoothing = config.get("smoothing", {})
-    smoother = KeypointSmoother.from_config(smoothing)
+    smoother = KeypointSmoother(
+        alpha=float(smoothing.get("alpha", 0.35)),
+        min_confidence=float(smoothing.get("min_confidence", 0.3)),
+        max_gap=int(smoothing.get("max_gap", 4)),
+    )
     videos = sorted(args.root.rglob("*.mp4"))
     if not videos:
         raise FileNotFoundError(f"No MP4 candidates found under {args.root}")

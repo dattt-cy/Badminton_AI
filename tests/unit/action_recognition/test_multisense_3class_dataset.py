@@ -3,7 +3,7 @@ from pathlib import Path
 
 import numpy as np
 
-from scripts.data.export_multisense_3class_pyskl import (
+from scripts.data.export.export_multisense_3class_pyskl import (
     load_subject_split,
     selected_pose_paths,
 )
@@ -63,7 +63,10 @@ def _write_pose(path: Path, confidence: float = 0.9):
 
 def test_expanded_split_config_is_subject_exclusive():
     mapping = load_subject_split(
-        Path("configs/action_recognition/dataset_multisense_3class_expanded.yaml")
+        Path(
+            "configs/action_recognition/datasets/"
+            "dataset_multisense_3class_expanded.yaml"
+        )
     )
     assert mapping["Sub13"] == "train"
     assert mapping["Sub20"] == "val"

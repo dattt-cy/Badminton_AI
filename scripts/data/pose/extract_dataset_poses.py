@@ -20,7 +20,7 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("configs/action_recognition/dataset.yaml"),
+        default=Path("configs/action_recognition/datasets/dataset.yaml"),
     )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--limit", type=int, default=None)
@@ -38,7 +38,11 @@ def main() -> None:
     output_root = Path(config["pose_output_root"])
     model = YOLO(config["model"])
     smoothing = config["smoothing"]
-    smoother = KeypointSmoother.from_config(smoothing)
+    smoother = KeypointSmoother(
+        alpha=float(smoothing["alpha"]),
+        min_confidence=float(smoothing["min_confidence"]),
+        max_gap=int(smoothing["max_gap"]),
+    )
 
     jobs: list[tuple[Path, Path, dict]] = []
     for action in config["classes"]:

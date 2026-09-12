@@ -2,7 +2,7 @@ from pathlib import Path
 
 import numpy as np
 
-from scripts.data.augment_manual_clips_motion_onset import (
+from scripts.data.augmentation.augment_manual_clips_motion_onset import (
     MotionOnsetJob,
     resample_pose,
     select_paired_jobs,
