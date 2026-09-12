@@ -1,0 +1,219 @@
+version: 1
+rule_kind: relative_2d_skill_level_thresholds
+split_rule: train subject number < 16; test >= 16
+status_counts:
+  rejected: 9
+  review: 1
+techniques:
+  backhand_drive:
+    views:
+      front:
+        rules: {}
+      side:
+        rules:
+          wrist_vertical_excursion:
+            status: rejected
+            threshold: 0.7466394996643066
+            direction: higher
+            train_metrics:
+              expert_recall: 0.7857142857142857
+              non_expert_recall: 0.4745762711864407
+              balanced_accuracy: 0.6301452784503632
+            test_metrics:
+              expert_recall: 0.6666666666666666
+              non_expert_recall: 0.34545454545454546
+              balanced_accuracy: 0.5060606060606061
+            train_sample_count: 73
+            test_sample_count: 73
+            train_subject_count: 7
+            test_subject_count: 5
+            train_expert_count: 14
+            train_non_expert_count: 59
+            test_expert_count: 18
+            test_non_expert_count: 55
+          wrist_path_length:
+            status: rejected
+            threshold: 1.315151286125183
+            direction: higher
+            train_metrics:
+              expert_recall: 0.7142857142857143
+              non_expert_recall: 0.0
+              balanced_accuracy: 0.35714285714285715
+            test_metrics:
+              expert_recall: 1.0
+              non_expert_recall: 0.0
+              balanced_accuracy: 0.5
+            train_sample_count: 73
+            test_sample_count: 73
+            train_subject_count: 7
+            test_subject_count: 5
+            train_expert_count: 14
+            train_non_expert_count: 59
+            test_expert_count: 18
+            test_non_expert_count: 55
+          elbow_angle_excursion:
+            status: rejected
+            threshold: 26.732353393554686
+            direction: higher
+            train_metrics:
+              expert_recall: 0.9285714285714286
+              non_expert_recall: 0.06779661016949153
+              balanced_accuracy: 0.4981840193704601
+            test_metrics:
+              expert_recall: 0.8888888888888888
+              non_expert_recall: 0.2
+              balanced_accuracy: 0.5444444444444444
+            train_sample_count: 73
+            test_sample_count: 73
+            train_subject_count: 7
+            test_subject_count: 5
+            train_expert_count: 14
+            train_non_expert_count: 59
+            test_expert_count: 18
+            test_non_expert_count: 55
+          peak_elbow_extension:
+            status: rejected
+            threshold: 127.18708795166016
+            direction: higher
+            train_metrics:
+              expert_recall: 0.7142857142857143
+              non_expert_recall: 0.13559322033898305
+              balanced_accuracy: 0.42493946731234866
+            test_metrics:
+              expert_recall: 1.0
+              non_expert_recall: 0.01818181818181818
+              balanced_accuracy: 0.509090909090909
+            train_sample_count: 73
+            test_sample_count: 73
+            train_subject_count: 7
+            test_subject_count: 5
+            train_expert_count: 14
+            train_non_expert_count: 59
+            test_expert_count: 18
+            test_non_expert_count: 55
+  forehand_clear:
+    views:
+      front:
+        rules: {}
+      side:
+        rules:
+          wrist_vertical_excursion:
+            status: review
+            threshold: 1.020178461074829
+            direction: higher
+            train_metrics:
+              expert_recall: 1.0
+              non_expert_recall: 0.14893617021276595
+              balanced_accuracy: 0.574468085106383
+            test_metrics:
+              expert_recall: 1.0
+              non_expert_recall: 0.05
+              balanced_accuracy: 0.525
+            train_sample_count: 70
+            test_sample_count: 59
+            train_subject_count: 8
+            test_subject_count: 5
+            train_expert_count: 23
+            train_non_expert_count: 47
+            test_expert_count: 19
+            test_non_expert_count: 40
+          wrist_path_length:
+            status: rejected
+            threshold: 2.917011079788208
+            direction: higher
+            train_metrics:
+              expert_recall: 0.8695652173913043
+              non_expert_recall: 0.06382978723404255
+              balanced_accuracy: 0.46669750231267343
+            test_metrics:
+              expert_recall: 0.9473684210526315
+              non_expert_recall: 0.025
+              balanced_accuracy: 0.4861842105263158
+            train_sample_count: 70
+            test_sample_count: 59
+            train_subject_count: 8
+            test_subject_count: 5
+            train_expert_count: 23
+            train_non_expert_count: 47
+            test_expert_count: 19
+            test_non_expert_count: 40
+          elbow_angle_excursion:
+            status: rejected
+            threshold: 48.564043579101586
+            direction: higher
+            train_metrics:
+              expert_recall: 0.9565217391304348
+              non_expert_recall: 0.2765957446808511
+              balanced_accuracy: 0.616558741905643
+            test_metrics:
+              expert_recall: 0.42105263157894735
+              non_expert_recall: 0.025
+              balanced_accuracy: 0.22302631578947368
+            train_sample_count: 70
+            test_sample_count: 59
+            train_subject_count: 8
+            test_subject_count: 5
+            train_expert_count: 23
+            train_non_expert_count: 47
+            test_expert_count: 19
+            test_non_expert_count: 40
+          peak_elbow_extension:
+            status: rejected
+            threshold: 151.39621765136718
+            direction: higher
+            train_metrics:
+              expert_recall: 0.7391304347826086
+              non_expert_recall: 0.7021276595744681
+              balanced_accuracy: 0.7206290471785384
+            test_metrics:
+              expert_recall: 0.631578947368421
+              non_expert_recall: 0.4
+              balanced_accuracy: 0.5157894736842106
+            train_sample_count: 70
+            test_sample_count: 59
+            train_subject_count: 8
+            test_subject_count: 5
+            train_expert_count: 23
+            train_non_expert_count: 47
+            test_expert_count: 19
+            test_non_expert_count: 40
+          reach_excursion:
+            status: rejected
+            threshold: 0.24439407616853714
+            direction: higher
+            train_metrics:
+              expert_recall: 0.8260869565217391
+              non_expert_recall: 0.14893617021276595
+              balanced_accuracy: 0.48751156336725254
+            test_metrics:
+              expert_recall: 1.0
+              non_expert_recall: 0.3
+              balanced_accuracy: 0.65
+            train_sample_count: 70
+            test_sample_count: 59
+            train_subject_count: 8
+            test_subject_count: 5
+            train_expert_count: 23
+            train_non_expert_count: 47
+            test_expert_count: 19
+            test_non_expert_count: 40
+          peak_reach:
+            status: rejected
+            threshold: 0.7023521435260773
+            direction: higher
+            train_metrics:
+              expert_recall: 0.8695652173913043
+              non_expert_recall: 0.1702127659574468
+              balanced_accuracy: 0.5198889916743755
+            test_metrics:
+              expert_recall: 0.9473684210526315
+              non_expert_recall: 0.1
+              balanced_accuracy: 0.5236842105263158
+            train_sample_count: 70
+            test_sample_count: 59
+            train_subject_count: 8
+            test_subject_count: 5
+            train_expert_count: 23
+            train_non_expert_count: 47
+            test_expert_count: 19
+            test_non_expert_count: 40

@@ -1,0 +1,2 @@
+report,stroke_id,true_swing_peak_frame,rule.preparation_arm_position_outlier,rule.stance_too_narrow,rule.backswing_elbow_angle_outlier,rule.excessive_torso_lean_in_forward_swing,rule.insufficient_reach,rule.arm_not_extended_near_contact,rule.limited_follow_through
+../../outputs/example_geometry_report.json,1,46,pass,pass,deviation,deviation,pass,pass,pass

@@ -73,6 +73,7 @@ rules:
     compatible_views:
     - front
     - side
+    orientation_requirement: prefer_aligned
   stance_too_narrow:
     feature: stance_width
     phase: preparation
@@ -85,6 +86,7 @@ rules:
     min_valid_ratio: 0.6
     compatible_views:
     - front
+    orientation_requirement: aligned
   backswing_elbow_angle_outlier:
     feature: elbow_angle
     phase: backswing
@@ -98,6 +100,7 @@ rules:
     compatible_views:
     - front
     - side
+    orientation_requirement: aligned
   excessive_torso_lean_in_forward_swing:
     feature: torso_lean
     phase: forward_swing
@@ -111,6 +114,7 @@ rules:
     compatible_views:
     - front
     - side
+    orientation_requirement: aligned
   insufficient_reach:
     feature: wrist_shoulder_distance
     phase: contact_estimated
@@ -124,6 +128,7 @@ rules:
     compatible_views:
     - front
     - side
+    orientation_requirement: prefer_aligned
   arm_not_extended_near_contact:
     feature: elbow_angle
     phase: contact_estimated
@@ -137,6 +142,7 @@ rules:
     compatible_views:
     - front
     - side
+    orientation_requirement: aligned
   limited_follow_through:
     feature: wrist_shoulder_distance
     phase: follow_through
@@ -150,6 +156,7 @@ rules:
     compatible_views:
     - front
     - side
+    orientation_requirement: prefer_aligned
 kinetic_chain_lags_diagnostic_only:
   hip_after_knee:
     low: -0.6666665077209473
@@ -167,3 +174,44 @@ kinetic_chain_lags_diagnostic_only:
     low: -0.9999999403953552
     high: 0.7333332300186157
     buffer_ratio: 0.05
+stroke_summary_ranges:
+  elbow_extension_delta:
+    low: -39.210140228271484
+    high: 37.89540481567383
+    buffer_ratio: 0.05
+    sample_count: 16
+  wrist_path_length:
+    low: 1.6543244123458862
+    high: 7.7984702587127686
+    buffer_ratio: 0.05
+    sample_count: 16
+  wrist_vertical_excursion:
+    low: 0.44233304262161255
+    high: 1.6664325594902039
+    buffer_ratio: 0.05
+    sample_count: 16
+  balance_offset_preparation:
+    low: 0.02853381261229515
+    high: 0.14228078722953796
+    buffer_ratio: 0.05
+    sample_count: 16
+  phase_duration_ratio.preparation:
+    low: 0.11974875972873333
+    high: 0.36064968623108157
+    buffer_ratio: 0.05
+    sample_count: 16
+  phase_duration_ratio.backswing:
+    low: 0.12223210315695865
+    high: 0.36064968623108157
+    buffer_ratio: 0.05
+    sample_count: 16
+  phase_duration_ratio.forward_swing:
+    low: 0.08365079365079364
+    high: 0.31943319838056683
+    buffer_ratio: 0.05
+    sample_count: 16
+  phase_duration_ratio.follow_through:
+    low: 0.11549395877754087
+    high: 0.4170359712230216
+    buffer_ratio: 0.05
+    sample_count: 16

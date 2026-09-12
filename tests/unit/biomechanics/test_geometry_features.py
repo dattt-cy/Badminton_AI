@@ -8,6 +8,7 @@ from ai_classifier.biomechanics import (
     estimate_pose_scale_px,
     extract_geometry_features,
     extract_kinetic_chain_timing,
+    summarize_stroke_geometry,
 )
 from ai_classifier.pose import PoseSequence
 
@@ -32,6 +33,7 @@ def test_extracts_right_elbow_angle_and_normalized_distance() -> None:
     assert features.column("stance_width")[1] == pytest.approx(1.0)
     assert features.column("elbow_height")[1] == pytest.approx(-0.5)
     assert features.column("elbow_torso_distance")[1] == pytest.approx(0.5)
+    assert features.column("balance_offset")[1] == pytest.approx(0.0)
 
 
 def test_invalid_joint_confidence_produces_nan() -> None:
@@ -58,6 +60,46 @@ def test_rejects_near_zero_projected_elbow_angle() -> None:
     features = extract_geometry_features(PoseSequence(keypoints, 30, 100, 100))
 
     assert np.isnan(features.column("elbow_angle")).all()
+
+
+def test_rejects_single_frame_arm_segment_collapse_with_high_confidence() -> None:
+    keypoints = np.zeros((7, 17, 3), dtype=np.float32)
+    keypoints[..., 2] = 0.9
+    keypoints[:, 5, :2] = [0, 0]
+    keypoints[:, 6, :2] = [2, 0]
+    keypoints[:, 8, :2] = [2, 1]
+    keypoints[:, 10, :2] = [3, 1]
+    keypoints[:, 11, :2] = [0, 2]
+    keypoints[:, 12, :2] = [2, 2]
+    keypoints[3, 8, :2] = [2, 0.05]
+
+    features = extract_geometry_features(PoseSequence(keypoints, 30, 100, 100))
+
+    assert np.isfinite(features.column("elbow_angle")[[0, 1, 2, 4, 5, 6]]).all()
+    assert np.isnan(features.column("elbow_angle")[3])
+
+
+def test_rejects_anatomically_impossible_arm_length_for_all_arm_features() -> None:
+    keypoints = np.zeros((7, 17, 3), dtype=np.float32)
+    keypoints[..., 2] = 0.9
+    keypoints[:, 5, :2] = [0, 0]
+    keypoints[:, 6, :2] = [2, 0]
+    keypoints[:, 8, :2] = [2, 1]
+    keypoints[:, 10, :2] = [3, 1]
+    keypoints[:, 11, :2] = [0, 2]
+    keypoints[:, 12, :2] = [2, 2]
+    keypoints[:, 14, :2] = [2, 3]
+    keypoints[:, 16, :2] = [2, 4]
+    keypoints[:, 15, :2] = [0, 4]
+    keypoints[3, 10, :2] = [20, 20]
+
+    features = extract_geometry_features(PoseSequence(keypoints, 30, 100, 100))
+
+    for name in (
+        "elbow_angle", "wrist_shoulder_distance", "wrist_height",
+        "elbow_height", "elbow_torso_distance",
+    ):
+        assert np.isnan(features.column(name)[3])
 
 
 def test_body_scale_falls_back_to_torso_length_when_shoulders_are_foreshortened() -> None:
@@ -212,6 +254,44 @@ def test_detect_stroke_phases_accepts_mid_clip_contact_with_complete_recovery() 
     assert phases.valid
     assert 43 <= phases.contact_frame <= 47
     assert (88 - phases.contact_estimated[1]) / 88 > 0.45
+
+
+def test_manual_swing_peak_overrides_automatic_candidate() -> None:
+    speed = np.full(30, 0.1, dtype=np.float32)
+    speed[8:11] = [2.0, 4.0, 2.0]
+    speed[19:22] = [3.0, 8.0, 3.0]
+    features = GeometryFeatures(
+        ("wrist_speed",), speed[:, None], np.ones((30, 1), dtype=np.float32),
+        np.arange(30, dtype=np.float32) / 30,
+    )
+
+    phases = detect_stroke_phases(features, swing_peak_frame=9)
+
+    assert phases.contact_frame == 9
+    assert phases.contact_confidence == 1.0
+    assert phases.peak_source == "manual"
+
+
+def test_stroke_summary_reports_cross_phase_motion() -> None:
+    names = ("elbow_angle", "wrist_height", "wrist_speed", "balance_offset")
+    values = np.column_stack((
+        np.array([80, 80, 80, 100, 120, 140, 150, 140, 130, 120]),
+        np.linspace(-0.5, 1.0, 10),
+        np.ones(10),
+        np.full(10, 0.25),
+    )).astype(np.float32)
+    features = GeometryFeatures(
+        names, values, np.ones_like(values), np.arange(10, dtype=np.float32) / 10,
+    )
+    phases = detect_stroke_phases(features, swing_peak_frame=6)
+
+    summary = summarize_stroke_geometry(features, phases)
+
+    assert summary.elbow_extension_delta > 0
+    assert summary.wrist_vertical_excursion == pytest.approx(1.5)
+    assert summary.wrist_path_length == pytest.approx(0.9)
+    assert summary.balance_offset_preparation == pytest.approx(0.25)
+    assert sum(summary.phase_duration_ratios.values()) == pytest.approx(1.0)
 
 
 def test_contact_selector_prefers_coordinated_later_swing_over_early_wrist_burst() -> None:

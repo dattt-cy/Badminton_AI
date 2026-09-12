@@ -53,6 +53,7 @@ class RuleDefinition:
     min_valid_frames: int = 3
     min_valid_ratio: float = 0.6
     compatible_views: tuple[str, ...] = ("front", "side")
+    orientation_requirement: str = "aligned"
 
 
 @dataclass(frozen=True)

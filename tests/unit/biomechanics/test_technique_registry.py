@@ -14,6 +14,8 @@ def test_load_project_registry() -> None:
     rules = {rule.name: rule for rule in forehand.rules}
     assert rules["elbow_too_low_in_backswing"].feature == "elbow_height"
     assert rules["stance_too_narrow"].compatible_views == ("front",)
+    assert rules["stance_too_narrow"].orientation_requirement == "aligned"
+    assert rules["insufficient_reach"].orientation_requirement == "prefer_aligned"
     assert forehand.minimum_reference_clips == 10
 
     clear = registry.technique("forehand_clear")
@@ -49,4 +51,25 @@ def test_registry_rejects_invalid_rule_direction(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="Invalid direction"):
+        load_technique_registry(path)
+
+
+def test_registry_rejects_invalid_orientation_requirement(tmp_path: Path) -> None:
+    path = tmp_path / "techniques.yaml"
+    path.write_text(
+        """techniques:
+  smash:
+    views:
+      side: {reference: smash.yaml}
+    rules:
+      - name: bad
+        feature: elbow_angle
+        phase: contact_estimated
+        direction: lower
+        orientation_requirement: approximate
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="orientation_requirement"):
         load_technique_registry(path)

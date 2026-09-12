@@ -13,8 +13,8 @@ Python.
 3. Build lại đúng góc quay:
 
 ```bash
-python scripts/data/build_reference_profiles.py forehand_lift --view side
-python scripts/data/build_reference_profiles.py forehand_lift --view front
+python scripts/data/references/build_reference_profiles.py forehand_lift --view side
+python scripts/data/references/build_reference_profiles.py forehand_lift --view front
 ```
 
 Quality gate vẫn tự loại pose quá nhỏ, thiếu keypoint, spike lớn hoặc phase
@@ -34,7 +34,7 @@ Ví dụ thêm `smash`:
 4. Build từng reference rồi chạy đánh giá:
 
 ```bash
-python scripts/data/build_reference_profiles.py smash --view side
+python scripts/data/references/build_reference_profiles.py smash --view side
 python scripts/evaluation/check_technique_rules.py outputs/smash_pose.npz smash --view side
 ```
 

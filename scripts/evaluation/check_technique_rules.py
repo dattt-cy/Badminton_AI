@@ -1,7 +1,7 @@
 """Run the rule engine on a pose clip, with Motion Proposal + boundary refinement.
 
 Usage:
-    python scripts/evaluation/check_technique_rules.py <pose.npz> <technique> [--handedness right]
+    python scripts/evaluation/check_technique_rules.py <pose.npz> <technique> --view side
 
 Short clips up to five seconds with at most one motion proposal are treated as
 one complete stroke automatically. Use --segmentation-mode multi for long or
@@ -22,14 +22,17 @@ import yaml
 
 from ai_classifier.biomechanics import (
     detect_stroke_phases,
+    evaluate_observable_criteria,
     extract_geometry_features,
     load_technique_registry,
+    summarize_stroke_geometry,
 )
 from ai_classifier.error_detection import (
     RangeCheck,
     RuleDefinition,
     RuleResult,
     evaluate_rule_definitions,
+    phase_feature_value,
 )
 from ai_classifier.pose import PoseSequence
 from ai_classifier.segmentation import (
@@ -57,10 +60,11 @@ def load_reference(path: Path) -> dict[str, RangeCheck]:
     }
 
 
-def load_rule_definitions(path: Path) -> list[RuleDefinition]:
+def load_rule_definitions(path: Path, rule_specs: tuple = ()) -> list[RuleDefinition]:
     document = yaml.safe_load(path.read_text(encoding="utf-8"))
     if "rules" not in document:
         raise ValueError(f"Reference has no declarative rules; rebuild it: {path}")
+    policies = {rule.name: rule.orientation_requirement for rule in rule_specs}
     return [
         RuleDefinition(
             name=name,
@@ -75,6 +79,9 @@ def load_rule_definitions(path: Path) -> list[RuleDefinition]:
             min_valid_frames=entry.get("min_valid_frames", 3),
             min_valid_ratio=entry.get("min_valid_ratio", 0.6),
             compatible_views=tuple(entry.get("compatible_views", ("front", "side"))),
+            orientation_requirement=entry.get(
+                "orientation_requirement", policies.get(name, "aligned")
+            ),
         )
         for name, entry in document["rules"].items()
     ]
@@ -154,101 +161,194 @@ def should_use_full_sequence(
     return duration <= max_seconds and merged_proposal_count <= 1
 
 
-def _combine_oblique_results(
-    front: RuleResult,
-    side: RuleResult,
-) -> RuleResult:
-    """Require front/side agreement before making an oblique-view assertion."""
-    if front.status == side.status:
-        return front
-    usable = [item for item in (front, side) if item.status != "insufficient_data"]
-    observed = next((item.observed for item in usable if item.observed is not None), None)
-    valid_frames = max((item.valid_frames for item in usable), default=0)
-    return RuleResult(
-        front.rule_name,
-        "review" if usable else "insufficient_data",
-        observed,
-        front.reference_low,
-        front.reference_high,
-        valid_frames,
-        reason="view_disagreement" if usable else "insufficient_view_data",
-    )
-
-
-def evaluate_rules_by_phase_view(
+def evaluate_rules_fixed_view(
     features: object,
     phases: object,
     sequence: PoseSequence,
-    rules_by_view: dict[str, list[RuleDefinition]],
+    rules: list[RuleDefinition],
+    view: str,
+    *,
+    camera_view_reliable: bool = True,
+    feature_validation: dict | None = None,
+    technique: str | None = None,
 ) -> tuple[list[RuleResult], list[dict], dict[str, dict]]:
-    """Evaluate each phase against front, side, or both reference profiles."""
-    phase_views = estimate_phase_views(sequence, phases)
-    ordered_names = [rule.name for rule in rules_by_view["front"]]
-    lookup = {
-        view: {rule.name: rule for rule in rules}
-        for view, rules in rules_by_view.items()
-    }
+    """Use one camera reference and treat body rotation as uncertainty.
+
+    Projected orientation can change as the athlete rotates, but the camera
+    view cannot. Therefore it may downgrade or reject a measurement; it must
+    never switch the reference profile in the middle of a stroke.
+    """
+    phase_orientations = estimate_phase_views(sequence, phases)
+    base_results = evaluate_rule_definitions(features, phases, rules, view=view)
     results: list[RuleResult] = []
     contexts: list[dict] = []
-    for name in ordered_names:
-        front_rule = lookup["front"][name]
-        phase_view = phase_views[front_rule.phase]["view"]
-        available = [
-            view for view in ("front", "side")
-            if name in lookup[view] and view in lookup[view][name].compatible_views
-        ]
-        if phase_view in {"front", "side"}:
-            chosen = phase_view if phase_view in available else None
-            if chosen is None:
-                rule = front_rule
-                result = evaluate_rule_definitions(features, phases, [rule], view=phase_view)[0]
-                contexts.append({"phase_view": phase_view, "evaluated_views": [], "rules": {}})
-            else:
-                rule = lookup[chosen][name]
-                result = evaluate_rule_definitions(features, phases, [rule], view=chosen)[0]
-                contexts.append({
-                    "phase_view": phase_view,
-                    "evaluated_views": [chosen],
-                    "rules": {chosen: rule},
-                })
-        elif phase_view == "oblique" and len(available) == 2:
-            front_result = evaluate_rule_definitions(
-                features, phases, [lookup["front"][name]], view="front"
-            )[0]
-            side_result = evaluate_rule_definitions(
-                features, phases, [lookup["side"][name]], view="side"
-            )[0]
-            result = _combine_oblique_results(front_result, side_result)
-            rule = front_rule
-            contexts.append({
-                "phase_view": "oblique",
-                "evaluated_views": ["front", "side"],
-                "rules": {
-                    "front": lookup["front"][name],
-                    "side": lookup["side"][name],
-                },
-            })
-        elif available:
-            chosen = available[0]
-            rule = lookup[chosen][name]
-            result = evaluate_rule_definitions(features, phases, [rule], view=chosen)[0]
-            if phase_view in {"oblique", "unknown"} and result.status != "insufficient_data":
-                result = RuleResult(
-                    result.rule_name, "review", result.observed,
-                    result.reference_low, result.reference_high,
-                    result.valid_frames, reason="single_view_evidence",
+    for rule, result in zip(rules, base_results):
+        orientation = phase_orientations[rule.phase]["view"]
+        if not camera_view_reliable:
+            result = _replace_result(
+                result, status="insufficient_data", reason="ambiguous_camera_view"
+            )
+        elif rule.orientation_requirement == "any":
+            pass
+        elif view in {"front", "side"} and orientation in {"front", "side"}:
+            if (
+                orientation != view
+                and rule.orientation_requirement == "aligned"
+                and result.status != "insufficient_data"
+            ):
+                result = _replace_result(
+                    result, status="insufficient_data", reason="out_of_plane_rotation"
                 )
-            contexts.append({
-                "phase_view": phase_view,
-                "evaluated_views": [chosen],
-                "rules": {chosen: rule},
-            })
-        else:
-            rule = front_rule
-            result = evaluate_rule_definitions(features, phases, [rule], view="side")[0]
-            contexts.append({"phase_view": phase_view, "evaluated_views": [], "rules": {}})
+            elif orientation != view and result.status != "insufficient_data":
+                result = _replace_result(
+                    result, status="review", reason="body_orientation_mismatch"
+                )
+        elif view in {"front", "side"} and orientation == "oblique":
+            if result.status != "insufficient_data":
+                result = _replace_result(
+                    result, status="review", reason="oblique_body_orientation"
+                )
+        elif orientation == "unknown" and result.status != "insufficient_data":
+            result = _replace_result(
+                result, status="insufficient_data", reason="unknown_body_orientation"
+            )
+        validation_entry = _feature_validation_entry(
+            feature_validation, technique, view, rule.feature
+        )
+        validation_status = validation_entry.get("status", "missing")
+        if result.status != "insufficient_data":
+            if validation_status in {"rejected", "missing"}:
+                result = _replace_result(
+                    result,
+                    status="insufficient_data",
+                    reason="feature_not_validated_2d_against_3d",
+                )
+            elif validation_status == "review":
+                result = _replace_result(
+                    result,
+                    status="review",
+                    reason="feature_requires_2d_3d_review",
+                )
         results.append(result)
-    return results, contexts, phase_views
+        contexts.append({
+            "phase_view": orientation,
+            "evaluated_views": [view],
+            "rules": {view: rule},
+            "phase": rule.phase,
+            "feature_validation": validation_entry,
+        })
+    return results, contexts, phase_orientations
+
+
+def _feature_validation_entry(
+    document: dict | None, technique: str | None, view: str, feature: str
+) -> dict:
+    if document is None:
+        return {"status": "not_applied"}
+    try:
+        return document["techniques"][technique]["views"][view]["features"][feature]
+    except KeyError:
+        return {"status": "missing"}
+
+
+def evaluate_relative_2d_indicators(
+    sequence: PoseSequence,
+    phases: object,
+    summary: object,
+    technique: str,
+    view: str,
+    registry: dict | None,
+    *,
+    handedness: str = "right",
+    floor_angle_degrees: float = 0.0,
+) -> list[dict]:
+    """Evaluate holdout-validated within-video indicators without hard grading."""
+    if registry is None or not phases.valid:
+        return []
+    try:
+        rules = registry["techniques"][technique]["views"][view]["rules"]
+    except KeyError:
+        return []
+    features = extract_geometry_features(
+        sequence, handedness=handedness,
+        floor_angle_degrees=floor_angle_degrees,
+    )
+    prep_reach = phase_feature_value(
+        features, phases.preparation, "wrist_shoulder_distance"
+    )
+    contact_reach = phase_feature_value(
+        features, phases.contact_estimated, "wrist_shoulder_distance"
+    )
+    prep_height = phase_feature_value(features, phases.preparation, "wrist_height")
+    contact_height = phase_feature_value(
+        features, phases.contact_estimated, "wrist_height"
+    )
+    follow_height = phase_feature_value(features, phases.follow_through, "wrist_height")
+    elbow_column = features.column("elbow_angle")
+    reach_column = features.column("wrist_shoulder_distance")
+    finite_elbow = elbow_column[np.isfinite(elbow_column)]
+    finite_reach = reach_column[np.isfinite(reach_column)]
+    elbow_p10, elbow_p90 = (
+        np.percentile(finite_elbow, [10, 90])
+        if finite_elbow.size else (float("nan"), float("nan"))
+    )
+    reach_p10, reach_p90 = (
+        np.percentile(finite_reach, [10, 90])
+        if finite_reach.size else (float("nan"), float("nan"))
+    )
+    values = {
+        "elbow_extension_delta": summary.elbow_extension_delta,
+        "contact_reach_gain": contact_reach - prep_reach,
+        "contact_wrist_height": contact_height,
+        "contact_wrist_height_gain": contact_height - prep_height,
+        "followthrough_wrist_drop": contact_height - follow_height,
+        "followthrough_elbow_angle": phase_feature_value(
+            features, phases.follow_through, "elbow_angle"
+        ),
+        "wrist_vertical_excursion": summary.wrist_vertical_excursion,
+        "wrist_path_length": summary.wrist_path_length,
+        "elbow_angle_excursion": elbow_p90 - elbow_p10,
+        "peak_elbow_extension": elbow_p90,
+        "reach_excursion": reach_p90 - reach_p10,
+        "peak_reach": reach_p90,
+    }
+    output = []
+    for name, rule in rules.items():
+        value = float(values.get(name, float("nan")))
+        registry_status = rule["status"]
+        if not np.isfinite(value):
+            status, reason = "unavailable", "invalid_measurement"
+        elif registry_status == "rejected":
+            status, reason = "unavailable", "relative_indicator_not_validated"
+        elif registry_status == "review":
+            status, reason = "review", "indicator_requires_review"
+        else:
+            passes = (
+                value >= float(rule["threshold"])
+                if rule["direction"] == "higher"
+                else value <= float(rule["threshold"])
+            )
+            status = "pass" if passes else "review"
+            reason = None if passes else "below_validated_expert_indicator"
+        output.append({
+            "feature": name,
+            "observed": value if np.isfinite(value) else None,
+            "threshold": float(rule["threshold"]),
+            "direction": rule["direction"],
+            "status": status,
+            "reason": reason,
+            "registry_status": registry_status,
+            "holdout_metrics": rule.get("test_metrics"),
+        })
+    return output
+
+
+def _replace_result(result: RuleResult, *, status: str, reason: str) -> RuleResult:
+    return RuleResult(
+        result.rule_name, status, result.observed,
+        result.reference_low, result.reference_high,
+        result.valid_frames, reason=reason,
+    )
 
 
 def analyse_clip(
@@ -259,45 +359,45 @@ def analyse_clip(
     label: str,
     view: str,
     floor_angle_degrees: float = 0.0,
-) -> tuple[object, list[RuleResult], list[dict], dict[str, dict]]:
+    camera_view_reliable: bool = True,
+    swing_peak_frame: int | None = None,
+    feature_validation: dict | None = None,
+) -> tuple[object, object, list[RuleResult], list[dict], dict[str, dict]]:
     """Run phase detection + rule checks on one clean stroke clip."""
     features = extract_geometry_features(
         sequence,
         handedness=handedness,
         floor_angle_degrees=floor_angle_degrees,
     )
-    phases = detect_stroke_phases(features)
+    phases = detect_stroke_phases(features, swing_peak_frame=swing_peak_frame)
+    summary = summarize_stroke_geometry(features, phases)
     print(
         f"  phases_valid={phases.valid}  "
         f"prep={phases.preparation}  backswing={phases.backswing}  "
         f"forward_swing={phases.forward_swing}  contact={phases.contact_estimated}  "
         f"follow_through={phases.follow_through}  "
-        f"contact_confidence={phases.contact_confidence:.3f}  "
+        f"swing_peak_confidence={phases.contact_confidence:.3f}  "
+        f"source={phases.peak_source}  "
         f"candidates={list(phases.contact_candidates)}"
     )
     if not phases.valid:
         print(f"  {label}: Insufficient data: implausible or incomplete stroke phases.")
-    if view == "phase-aware":
-        results, contexts, phase_views = evaluate_rules_by_phase_view(
-            features, phases, sequence, rules_by_view
+    rules = rules_by_view[view]
+    results, contexts, phase_views = evaluate_rules_fixed_view(
+        features, phases, sequence, rules, view,
+        camera_view_reliable=camera_view_reliable,
+        feature_validation=feature_validation,
+        technique=technique,
+    )
+    rendered_views = ", ".join(
+        f"{name}={entry['view']}"
+        + (
+            f"({entry['projected_ratio']:.3f})"
+            if entry["projected_ratio"] is not None else ""
         )
-        rendered_views = ", ".join(
-            f"{name}={entry['view']}"
-            + (
-                f"({entry['projected_ratio']:.3f})"
-                if entry["projected_ratio"] is not None else ""
-            )
-            for name, entry in phase_views.items()
-        )
-        print(f"  phase_views: {rendered_views}")
-    else:
-        rules = rules_by_view[view]
-        results = evaluate_rule_definitions(features, phases, rules, view=view)
-        contexts = [
-            {"phase_view": view, "evaluated_views": [view], "rules": {view: rule}}
-            for rule in rules
-        ]
-        phase_views = {name: {"view": view, "projected_ratio": None} for name in PHASE_NAMES}
+        for name, entry in phase_views.items()
+    )
+    print(f"  body_orientation_by_phase: {rendered_views}")
     for result, context in zip(results, contexts):
         observed = "n/a" if result.observed is None else f"{result.observed:.3f}"
         reason = f" reason={result.reason}" if result.reason else ""
@@ -307,7 +407,7 @@ def analyse_clip(
             f"accepted {accepted} "
             f"valid_frames={result.valid_frames}{reason}"
         )
-    return phases, results, contexts, phase_views
+    return phases, summary, results, contexts, phase_views
 
 
 def main() -> None:
@@ -325,10 +425,34 @@ def main() -> None:
         help="Observed slope of a horizontal court line, positive downward to the right.",
     )
     parser.add_argument(
-        "--view", choices=("auto", "front", "side", "generic"), default="auto",
-        help="Reference geometry to use. Auto selects from projected body orientation.",
+        "--relative-2d-rules", type=Path,
+        default=Path("configs/biomechanics/multisense_relative_2d_rules.yaml"),
+    )
+    parser.add_argument("--no-relative-2d-rules", action="store_true")
+    parser.add_argument(
+        "--view", choices=("front", "side", "generic"), required=True,
+        help="Fixed camera view for the whole clip; this is never inferred from body rotation.",
+    )
+    parser.add_argument(
+        "--reference", type=Path,
+        help="Optional reference override for controlled A/B validation.",
+    )
+    parser.add_argument(
+        "--swing-peak-frame", type=int,
+        help="Manual swing-peak frame for a pre-trimmed single-stroke clip.",
     )
     parser.add_argument("--output", type=Path, help="Optional structured JSON report")
+    parser.add_argument(
+        "--feature-validation", type=Path,
+        default=Path(
+            "configs/biomechanics/multisense_feature_validation_projected.yaml"
+        ),
+        help="MultiSense 2D-vs-3D feature reliability registry",
+    )
+    parser.add_argument(
+        "--no-feature-validation", action="store_true",
+        help="Disable 3D-derived feature gates for controlled A/B audits only",
+    )
     parser.add_argument(
         "--segmentation-mode",
         choices=("auto", "single", "multi"),
@@ -344,14 +468,32 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    feature_validation = None
+    if not args.no_feature_validation:
+        if not args.feature_validation.is_file():
+            raise FileNotFoundError(
+                f"Feature validation registry not found: {args.feature_validation}"
+            )
+        feature_validation = yaml.safe_load(
+            args.feature_validation.read_text(encoding="utf-8")
+        )
+    relative_2d_registry = None
+    if not args.no_relative_2d_rules:
+        if not args.relative_2d_rules.is_file():
+            raise FileNotFoundError(
+                f"Relative 2D rule registry not found: {args.relative_2d_rules}"
+            )
+        relative_2d_registry = yaml.safe_load(
+            args.relative_2d_rules.read_text(encoding="utf-8")
+        )
+
     registry = load_technique_registry(args.registry)
     technique = registry.technique(args.technique)
     sequence = load_pose(args.input)
-    phase_aware = args.view == "auto" and {"front", "side"} <= set(technique.views)
-    selected_view = "phase-aware" if phase_aware else (
-        estimate_view(sequence) if args.view == "auto" else args.view
-    )
-    requested_views = ("front", "side") if phase_aware else (selected_view,)
+    detected_view, projected_ratio = estimate_view_with_ratio(sequence)
+    camera_view_reliable = True
+    selected_view = args.view
+    requested_views = (selected_view,)
     missing_views = [view for view in requested_views if view not in technique.views]
     if missing_views:
         available = ", ".join(sorted(technique.views))
@@ -359,7 +501,7 @@ def main() -> None:
             f"Technique '{args.technique}' has no '{missing_views[0]}' view; available: {available}"
         )
     reference_paths = {
-        view: technique.views[view].reference for view in requested_views
+        view: args.reference or technique.views[view].reference for view in requested_views
     }
     reference_documents = {}
     rules_by_view = {}
@@ -367,14 +509,15 @@ def main() -> None:
         if not reference_path.exists():
             print(f"Reference profile not found: {reference_path}", file=sys.stderr)
             print(
-                f"Run: python scripts/data/build_reference_profiles.py {args.technique} "
+                "Run: python scripts/data/references/build_reference_profiles.py "
+                f"{args.technique} "
                 f"--view {view}", file=sys.stderr,
             )
             sys.exit(1)
         reference_documents[view] = yaml.safe_load(
             reference_path.read_text(encoding="utf-8")
         )
-        rules_by_view[view] = load_rule_definitions(reference_path)
+        rules_by_view[view] = load_rule_definitions(reference_path, technique.rules)
     reference_status = (
         "ready"
         if all(doc.get("reference_status") == "ready" for doc in reference_documents.values())
@@ -396,10 +539,29 @@ def main() -> None:
         "input": str(args.input),
         "technique": args.technique,
         "view": selected_view,
+        "view_selection": {
+            "requested": args.view,
+            "detected_body_projection": detected_view,
+            "projected_shoulder_torso_ratio": projected_ratio,
+            "reliable": camera_view_reliable,
+        },
         "references": {view: str(path) for view, path in reference_paths.items()},
         "reference_status": reference_status,
         "reference_sample_counts": reference_sample_counts,
         "minimum_reference_clips": technique.minimum_reference_clips,
+        "feature_validation": (
+            {"enabled": True, "path": str(args.feature_validation),
+             "holdout_rule": feature_validation.get("holdout_rule")}
+            if feature_validation is not None else {"enabled": False}
+        ),
+        "relative_2d_rules": {
+            "enabled": relative_2d_registry is not None,
+            "path": str(args.relative_2d_rules) if relative_2d_registry else None,
+            "split_rule": (
+                relative_2d_registry.get("split_rule")
+                if relative_2d_registry else None
+            ),
+        },
         "frame_count": len(sequence.keypoints),
         "fps": sequence.fps,
         "floor_angle_degrees": args.floor_angle_degrees,
@@ -422,22 +584,46 @@ def main() -> None:
     report["segmentation_mode"] = segmentation_mode
     report["raw_motion_proposals"] = raw_proposal_count
     report["merged_strokes"] = len(proposals)
+    if args.swing_peak_frame is not None and not use_full_sequence:
+        raise ValueError("--swing-peak-frame requires a single/full-sequence clip")
 
     if use_full_sequence:
         # Treat the entire sequence as one pre-trimmed stroke.
         mode_reason = "explicit" if segmentation_mode == "single" else "auto short-single-stroke"
         print(f"Mode: full sequence ({mode_reason})")
-        phases, results, contexts, phase_views = analyse_clip(
+        phases, summary, results, contexts, phase_views = analyse_clip(
             sequence, args.technique, rules_by_view, args.handedness,
-            "stroke-1", selected_view, args.floor_angle_degrees
+            "stroke-1", selected_view, args.floor_angle_degrees,
+            camera_view_reliable, args.swing_peak_frame,
+            feature_validation,
+        )
+        relative_indicators = evaluate_relative_2d_indicators(
+            sequence, phases, summary, args.technique, selected_view,
+            relative_2d_registry, handedness=args.handedness,
+            floor_angle_degrees=args.floor_angle_degrees,
+        )
+        observable_criteria = evaluate_observable_criteria(
+            sequence, phases, args.technique, selected_view,
+            handedness=args.handedness,
         )
         report["strokes"].append({
             "stroke_id": 1,
             "start_frame": 0,
             "end_frame": len(sequence.keypoints) - 1,
-            "phases": asdict(phases),
+            "phases": _serialize_phases(phases),
             "phase_views": phase_views,
-            "rules": _serialize_results(results, contexts),
+            "phase_orientations": phase_views,
+            "summary": _serialize_summary(summary, selected_view),
+            "relative_2d_indicators": relative_indicators,
+            "observable_criteria": observable_criteria,
+            "user_feedback": _practical_user_feedback(
+                results, contexts, relative_indicators, observable_criteria
+            ),
+            "summary_reference_comparison": _compare_summary(
+                summary, reference_documents[selected_view], phase_views, selected_view
+            ),
+            "rules": _serialize_results(results, contexts, phases),
+            "highlights": _build_highlights(results, contexts, phases),
             "geometry_assessment": _overall_assessment(results, reference_status),
         })
         _write_report(args.output, report)
@@ -460,9 +646,19 @@ def main() -> None:
             f"duration={( stroke.end_frame - stroke.start_frame) / sequence.fps:.2f}s"
         )
         clip_seq = stroke.clip(sequence)
-        phases, results, contexts, phase_views = analyse_clip(
+        phases, summary, results, contexts, phase_views = analyse_clip(
             clip_seq, args.technique, rules_by_view, args.handedness, label,
-            selected_view, args.floor_angle_degrees
+            selected_view, args.floor_angle_degrees, camera_view_reliable,
+            feature_validation=feature_validation,
+        )
+        relative_indicators = evaluate_relative_2d_indicators(
+            clip_seq, phases, summary, args.technique, selected_view,
+            relative_2d_registry, handedness=args.handedness,
+            floor_angle_degrees=args.floor_angle_degrees,
+        )
+        observable_criteria = evaluate_observable_criteria(
+            clip_seq, phases, args.technique, selected_view,
+            handedness=args.handedness,
         )
         report["strokes"].append({
             "stroke_id": i,
@@ -470,13 +666,28 @@ def main() -> None:
             "end_frame": stroke.end_frame,
             "motion_peak_frame": stroke.peak_frame,
             "estimated_contact_frame": stroke.start_frame + phases.contact_frame,
+            "estimated_swing_peak_frame": stroke.start_frame + phases.contact_frame,
             "candidate_contact_frames": [
                 stroke.start_frame + frame for frame in phases.contact_candidates
             ],
+            "candidate_swing_peak_frames": [
+                stroke.start_frame + frame for frame in phases.contact_candidates
+            ],
             "source_proposals": stroke.proposal.source_count,
-            "phases": asdict(phases),
+            "phases": _serialize_phases(phases),
             "phase_views": phase_views,
-            "rules": _serialize_results(results, contexts),
+            "phase_orientations": phase_views,
+            "summary": _serialize_summary(summary, selected_view),
+            "relative_2d_indicators": relative_indicators,
+            "observable_criteria": observable_criteria,
+            "user_feedback": _practical_user_feedback(
+                results, contexts, relative_indicators, observable_criteria
+            ),
+            "summary_reference_comparison": _compare_summary(
+                summary, reference_documents[selected_view], phase_views, selected_view
+            ),
+            "rules": _serialize_results(results, contexts, phases),
+            "highlights": _build_highlights(results, contexts, phases),
             "geometry_assessment": _overall_assessment(results, reference_status),
         })
     report["merged_strokes"] = len(strokes)
@@ -510,18 +721,328 @@ def _accepted_conditions(context: dict) -> str:
     return "; ".join(rendered)
 
 
-def _serialize_results(results: list, contexts: list[dict]) -> list[dict]:
+RULE_LABELS = {
+    "preparation_arm_position_outlier": "Vị trí tay khi chuẩn bị",
+    "stance_too_narrow": "Độ rộng chân khi chuẩn bị",
+    "elbow_too_close_to_torso": "Khoảng cách khuỷu với thân",
+    "elbow_too_low_in_backswing": "Độ cao khuỷu khi backswing",
+    "backswing_elbow_angle_outlier": "Góc khuỷu khi backswing",
+    "backswing_wrist_height_outlier": "Độ cao cổ tay khi backswing",
+    "excessive_torso_lean_in_forward_swing": "Độ nghiêng thân khi tăng tốc",
+    "insufficient_reach": "Độ vươn tay gần swing peak",
+    "arm_not_extended_near_contact": "Độ duỗi tay gần swing peak",
+    "contact_wrist_height_outlier": "Độ cao cổ tay gần swing peak",
+    "limited_follow_through": "Biên độ follow-through",
+    "follow_through_elbow_angle_outlier": "Góc khuỷu khi follow-through",
+}
+
+FEATURE_LABELS_VI = {
+    "elbow_angle": "Góc khuỷu",
+    "wrist_shoulder_distance": "Độ vươn tay",
+    "wrist_height": "Độ cao cổ tay",
+    "elbow_torso_distance": "Khoảng cách khuỷu–thân",
+    "torso_lean": "Độ nghiêng thân",
+    "stance_width": "Độ rộng chân",
+    "elbow_extension_delta": "Mức duỗi thêm của khuỷu",
+    "contact_reach_gain": "Mức tăng độ vươn gần contact",
+    "contact_wrist_height": "Độ cao cổ tay gần contact",
+    "contact_wrist_height_gain": "Mức nâng cổ tay",
+    "followthrough_wrist_drop": "Mức hạ cổ tay follow-through",
+    "wrist_vertical_excursion": "Biên độ cổ tay theo chiều dọc",
+    "wrist_path_length": "Quãng đường cổ tay",
+    "elbow_angle_excursion": "Biên độ góc khuỷu",
+    "peak_elbow_extension": "Góc khuỷu duỗi lớn nhất",
+    "reach_excursion": "Biên độ vươn tay",
+    "peak_reach": "Độ vươn tay lớn nhất",
+}
+
+REASON_LABELS_VI = {
+    "feature_not_validated_2d_against_3d": "Phép đo chưa vượt kiểm định MultiSense.",
+    "feature_requires_2d_3d_review": "Phép đo chỉ đủ dùng làm chỉ số tham khảo.",
+    "out_of_plane_rotation": "Cơ thể xoay lệch khỏi mặt phẳng camera.",
+    "incompatible_camera_view": "Góc camera này không phù hợp với phép đo.",
+    "too_few_confident_frames": "Không đủ frame có keypoint đáng tin.",
+    "low_contact_confidence": "Thời điểm contact chưa đủ chắc chắn.",
+    "unknown_body_orientation": "Không xác định được hướng cơ thể.",
+    "oblique_body_orientation": "Cơ thể đang ở góc chéo so với camera.",
+    "body_orientation_mismatch": "Hướng cơ thể không khớp góc quay đã chọn.",
+}
+
+
+def _measurement_unit(feature: str) -> str:
+    return "degree" if feature in {
+        "elbow_angle", "torso_lean", "elbow_extension_delta",
+        "elbow_angle_excursion", "peak_elbow_extension",
+    } else "body_scale_ratio"
+
+
+def _practical_user_feedback(
+    results: list[RuleResult],
+    contexts: list[dict],
+    relative_indicators: list[dict],
+    observable_criteria: list[dict] | None = None,
+) -> dict:
+    """Build conservative, score-free feedback for phone-video users."""
+    good_signals, observations, unavailable = [], [], []
+    for result, context in zip(results, contexts):
+        rule = next(iter(context["rules"].values()))
+        validation = context.get("feature_validation") or {"status": "missing"}
+        item = {
+            "feature": rule.feature,
+            "label": FEATURE_LABELS_VI.get(rule.feature, rule.feature),
+            "phase": rule.phase,
+            "observed": result.observed,
+            "unit": _measurement_unit(rule.feature),
+            "validation_status": validation.get("status", "missing"),
+        }
+        if result.status == "pass" and validation.get("status") == "validated":
+            item["message"] = "Có dấu hiệu phù hợp với vùng tham chiếu đã kiểm định."
+            good_signals.append(item)
+        elif result.status == "review":
+            item["message"] = (
+                "Chỉ số được hiển thị để tham khảo; chưa đủ bằng chứng kết luận đúng hoặc sai."
+            )
+            observations.append(item)
+        else:
+            item["reason"] = REASON_LABELS_VI.get(
+                result.reason, "Phép đo chưa đủ tin cậy để đánh giá."
+            )
+            unavailable.append(item)
+
+    for indicator in relative_indicators:
+        item = {
+            "feature": indicator["feature"],
+            "label": FEATURE_LABELS_VI.get(
+                indicator["feature"], indicator["feature"]
+            ),
+            "observed": indicator["observed"],
+            "threshold": indicator["threshold"],
+            "direction": indicator["direction"],
+            "unit": _measurement_unit(indicator["feature"]),
+            "validation_status": indicator["registry_status"],
+        }
+        if indicator["status"] == "pass" and indicator["registry_status"] == "validated":
+            item["message"] = "Có dấu hiệu tương tự nhóm Expert trong kiểm định holdout."
+            good_signals.append(item)
+        elif indicator["status"] == "review":
+            item["message"] = "Chỉ số tương đối cần được xem lại, không phải kết luận lỗi."
+            observations.append(item)
+        # Rejected experimental indicators remain in `relative_2d_indicators`
+        # for audit, but are intentionally hidden from user-facing feedback.
+
+    heuristic_observations = []
+    for criterion in observable_criteria or []:
+        if criterion["status"] == "unavailable":
+            unavailable.append({
+                "feature": criterion["criterion"],
+                "label": criterion["label"],
+                "observed": criterion["observed"],
+                "unit": criterion["unit"],
+                "validation_status": "experimental_heuristic",
+                "reason": criterion["message"],
+            })
+        else:
+            heuristic_observations.append(criterion)
+
+    if good_signals:
+        overall = "observable_good_signals"
+    elif observations or heuristic_observations:
+        overall = "review_available"
+    else:
+        overall = "insufficient_data"
+    return {
+        "mode": "experimental_geometry_preview",
+        "overall": overall,
+        "score": None,
+        "good_signals": good_signals,
+        "observations_for_review": observations,
+        "heuristic_observations": heuristic_observations,
+        "not_assessed": unavailable,
+        "disclaimer": (
+            "Kết quả mô tả tín hiệu hình học quan sát được từ video; "
+            "không phải điểm số hoặc chẩn đoán kỹ thuật chuyên môn."
+        ),
+    }
+
+
+def _serialize_phases(phases: object) -> dict:
+    item = asdict(phases)
+    item["estimated_swing_peak_frame"] = phases.contact_frame
+    item["swing_peak_confidence"] = phases.contact_confidence
+    item["candidate_swing_peak_frames"] = list(phases.contact_candidates)
+    return item
+
+
+def _serialize_summary(summary: object, view: str | None = None) -> dict:
+    item = asdict(summary)
+    for name, value in list(item.items()):
+        if isinstance(value, float) and not np.isfinite(value):
+            item[name] = None
+    item["balance_offset_interpretation"] = {
+        "front": "lateral",
+        "side": "forward",
+    }.get(view, "image_horizontal")
+    return item
+
+
+def _compare_summary(
+    summary: object,
+    reference_document: dict,
+    phase_orientations: dict[str, dict] | None = None,
+    view: str = "generic",
+) -> list[dict]:
+    ranges = reference_document.get("stroke_summary_ranges", {})
+    values = {
+        "elbow_extension_delta": summary.elbow_extension_delta,
+        "wrist_path_length": summary.wrist_path_length,
+        "wrist_vertical_excursion": summary.wrist_vertical_excursion,
+        "balance_offset_preparation": summary.balance_offset_preparation,
+        **{
+            f"phase_duration_ratio.{name}": value
+            for name, value in summary.phase_duration_ratios.items()
+        },
+    }
+    output = []
+    for name, value in values.items():
+        if name == "phase_duration_ratio.contact_estimated":
+            output.append({
+                "feature": name,
+                "observed": float(value),
+                "status": "unavailable",
+                "reason": "algorithm_defined_window_not_coaching_metric",
+            })
+            continue
+        reference = ranges.get(name)
+        if reference is None or not np.isfinite(value):
+            output.append({
+                "feature": name,
+                "observed": float(value) if np.isfinite(value) else None,
+                "status": "unavailable",
+                "reason": "reference_not_built" if reference is None else "invalid_measurement",
+            })
+            continue
+        low, high = float(reference["low"]), float(reference["high"])
+        position = "within_reference" if low <= value <= high else "outside_reference"
+        reliability = _summary_reliability(name, phase_orientations, view)
+        if reliability == "insufficient":
+            output.append({
+                "feature": name,
+                "observed": float(value),
+                "status": "unavailable",
+                "reference_position": position,
+                "reference_low": low,
+                "reference_high": high,
+                "reason": "out_of_plane_rotation",
+                "sample_count": int(reference.get("sample_count", 0)),
+            })
+            continue
+        output.append({
+            "feature": name,
+            "observed": float(value),
+            "reference_low": low,
+            "reference_high": high,
+            "status": "review" if reliability == "review" else position,
+            "reference_position": position,
+            "measurement_confidence": reliability,
+            "sample_count": int(reference.get("sample_count", 0)),
+        })
+    return output
+
+
+def _summary_reliability(
+    feature: str,
+    phase_orientations: dict[str, dict] | None,
+    view: str,
+) -> str:
+    if not phase_orientations or view not in {"front", "side"}:
+        return "high"
+    if feature == "elbow_extension_delta":
+        phases, strict = ("backswing", "contact_estimated"), True
+    elif feature == "balance_offset_preparation":
+        phases, strict = ("preparation",), False
+    elif feature in {"wrist_path_length", "wrist_vertical_excursion"}:
+        phases, strict = tuple(PHASE_NAMES), False
+    else:
+        return "high"
+    orientations = [phase_orientations[name]["view"] for name in phases]
+    if strict and any(item not in {view, "oblique"} for item in orientations):
+        return "insufficient"
+    if any(item != view for item in orientations):
+        return "review"
+    return "high"
+
+
+def _review_frame(context: dict, phases: object) -> int:
+    phase = context.get("phase")
+    if phase == "contact_estimated":
+        return int(phases.contact_frame)
+    if phase and hasattr(phases, phase):
+        start, end = getattr(phases, phase)
+        return int((start + max(start, end - 1)) // 2)
+    return int(phases.contact_frame)
+
+
+def _evidence_text(result: RuleResult) -> str:
+    if result.observed is None:
+        return "Không đủ phép đo tin cậy."
+    value = result.observed
+    if result.status == "pass":
+        return (
+            f"{value:.1f}, nằm trong vùng tham chiếu "
+            f"[{result.reference_low:.1f}, {result.reference_high:.1f}]."
+        )
+    if value < result.reference_low:
+        delta = result.reference_low - value
+        return f"{value:.1f}, thấp hơn cận tham chiếu {delta:.1f}."
+    if value > result.reference_high:
+        delta = value - result.reference_high
+        return f"{value:.1f}, cao hơn cận tham chiếu {delta:.1f}."
+    return f"{value:.1f}; cần xem lại do độ tin cậy phép chiếu."
+
+
+def _serialize_results(
+    results: list, contexts: list[dict], phases: object
+) -> list[dict]:
     output = []
     for result, context in zip(results, contexts):
         item = asdict(result)
+        item["finding"] = RULE_LABELS.get(
+            result.rule_name, result.rule_name.replace("_", " ")
+        )
+        item["evidence"] = _evidence_text(result)
+        item["phase"] = context.get("phase")
+        item["review_frame"] = _review_frame(context, phases)
         item["phase_view"] = context["phase_view"]
         item["evaluated_views"] = context["evaluated_views"]
         item["accepted_conditions"] = {
             view: _accepted_condition(rule)
             for view, rule in context["rules"].items()
         }
+        item["feature_validation"] = context.get("feature_validation")
         output.append(item)
     return output
+
+
+def _build_highlights(
+    results: list[RuleResult], contexts: list[dict], phases: object
+) -> dict[str, list[dict]]:
+    groups = {"strengths": [], "needs_review": [], "insufficient_data": []}
+    for result, context in zip(results, contexts):
+        entry = {
+            "rule_name": result.rule_name,
+            "finding": RULE_LABELS.get(
+                result.rule_name, result.rule_name.replace("_", " ")
+            ),
+            "evidence": _evidence_text(result),
+            "review_frame": _review_frame(context, phases),
+        }
+        if result.status == "pass":
+            groups["strengths"].append(entry)
+        elif result.status == "insufficient_data":
+            groups["insufficient_data"].append(entry)
+        else:
+            groups["needs_review"].append(entry)
+    return groups
 
 
 def _overall_assessment(results: list, reference_status: str = "ready") -> str:

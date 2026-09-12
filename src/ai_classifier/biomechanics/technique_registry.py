@@ -19,6 +19,7 @@ class TechniqueRuleSpec:
     min_valid_frames: int = 3
     min_valid_ratio: float = 0.6
     compatible_views: tuple[str, ...] = ("front", "side")
+    orientation_requirement: str = "aligned"
 
 
 @dataclass(frozen=True)
@@ -106,10 +107,17 @@ def _load_rule(technique: str, raw: dict[str, Any]) -> TechniqueRuleSpec:
     min_valid_ratio = float(raw.get("min_valid_ratio", 0.6))
     if not 0.0 <= min_valid_ratio <= 1.0:
         raise ValueError(f"Rule '{raw['name']}' min_valid_ratio must be between 0 and 1")
+    orientation_requirement = str(raw.get("orientation_requirement", "aligned"))
+    if orientation_requirement not in {"any", "prefer_aligned", "aligned"}:
+        raise ValueError(
+            f"Rule '{raw['name']}' orientation_requirement must be "
+            "any, prefer_aligned, or aligned"
+        )
     return TechniqueRuleSpec(
         name=str(raw["name"]), feature=str(raw["feature"]), phase=str(raw["phase"]),
         direction=direction, min_confidence=float(raw.get("min_confidence", 0.6)),
         min_valid_frames=int(raw.get("min_valid_frames", 3)),
         min_valid_ratio=min_valid_ratio,
         compatible_views=views,
+        orientation_requirement=orientation_requirement,
     )

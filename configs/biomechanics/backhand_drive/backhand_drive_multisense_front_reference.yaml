@@ -79,6 +79,7 @@ rules:
     min_valid_ratio: 0.6
     compatible_views:
     - front
+    orientation_requirement: aligned
   preparation_arm_position_outlier:
     feature: wrist_shoulder_distance
     phase: preparation
@@ -92,6 +93,7 @@ rules:
     compatible_views:
     - front
     - side
+    orientation_requirement: prefer_aligned
   stance_too_narrow:
     feature: stance_width
     phase: preparation
@@ -104,6 +106,7 @@ rules:
     min_valid_ratio: 0.6
     compatible_views:
     - front
+    orientation_requirement: aligned
   backswing_elbow_angle_outlier:
     feature: elbow_angle
     phase: backswing
@@ -117,6 +120,7 @@ rules:
     compatible_views:
     - front
     - side
+    orientation_requirement: aligned
   backswing_wrist_height_outlier:
     feature: wrist_height
     phase: backswing
@@ -130,6 +134,7 @@ rules:
     compatible_views:
     - front
     - side
+    orientation_requirement: aligned
   excessive_torso_lean_in_forward_swing:
     feature: torso_lean
     phase: forward_swing
@@ -143,6 +148,7 @@ rules:
     compatible_views:
     - front
     - side
+    orientation_requirement: aligned
   insufficient_reach:
     feature: wrist_shoulder_distance
     phase: contact_estimated
@@ -156,6 +162,7 @@ rules:
     compatible_views:
     - front
     - side
+    orientation_requirement: prefer_aligned
   arm_not_extended_near_contact:
     feature: elbow_angle
     phase: contact_estimated
@@ -169,6 +176,7 @@ rules:
     compatible_views:
     - front
     - side
+    orientation_requirement: aligned
   contact_wrist_height_outlier:
     feature: wrist_height
     phase: contact_estimated
@@ -182,6 +190,7 @@ rules:
     compatible_views:
     - front
     - side
+    orientation_requirement: aligned
   limited_follow_through:
     feature: wrist_shoulder_distance
     phase: follow_through
@@ -195,6 +204,7 @@ rules:
     compatible_views:
     - front
     - side
+    orientation_requirement: prefer_aligned
   follow_through_elbow_angle_outlier:
     feature: elbow_angle
     phase: follow_through
@@ -208,6 +218,7 @@ rules:
     compatible_views:
     - front
     - side
+    orientation_requirement: aligned
 kinetic_chain_lags_diagnostic_only:
   hip_after_knee:
     low: -0.7066666603088378
@@ -225,3 +236,44 @@ kinetic_chain_lags_diagnostic_only:
     low: -1.0933333158493042
     high: 0.9266666173934941
     buffer_ratio: 0.05
+stroke_summary_ranges:
+  elbow_extension_delta:
+    low: -48.54442596435547
+    high: 25.00013885498047
+    buffer_ratio: 0.05
+    sample_count: 13
+  wrist_path_length:
+    low: 2.1845504283905033
+    high: 12.218756675720215
+    buffer_ratio: 0.05
+    sample_count: 13
+  wrist_vertical_excursion:
+    low: 0.527328610420227
+    high: 2.018084239959717
+    buffer_ratio: 0.05
+    sample_count: 13
+  balance_offset_preparation:
+    low: 0.031016905605793003
+    high: 0.10905818790197373
+    buffer_ratio: 0.05
+    sample_count: 13
+  phase_duration_ratio.preparation:
+    low: 0.17016018306636158
+    high: 0.3303833683005913
+    buffer_ratio: 0.05
+    sample_count: 13
+  phase_duration_ratio.backswing:
+    low: 0.17173913043478264
+    high: 0.33242418462712187
+    buffer_ratio: 0.05
+    sample_count: 13
+  phase_duration_ratio.forward_swing:
+    low: 0.05729003359462486
+    high: 0.25942028985507254
+    buffer_ratio: 0.05
+    sample_count: 13
+  phase_duration_ratio.follow_through:
+    low: 0.16631849001282756
+    high: 0.3748970251716247
+    buffer_ratio: 0.05
+    sample_count: 13
