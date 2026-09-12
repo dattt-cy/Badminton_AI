@@ -123,9 +123,9 @@ def evaluate_observable_criteria(
             height = float((head_contact[1] - wrist_contact[1]) / scale)
             status = "observed" if height >= 0 else "needs_review"
             output.append(_item(
-                "contact_above_head", "Điểm đánh phía trên đầu", height, status,
-                "Cổ tay ở trên vùng đầu tại contact." if status == "observed"
-                else "Cổ tay chưa thể hiện rõ vị trí ở trên đầu tại contact.",
+                "contact_above_head", "Điểm chạm cầu phía trên đầu", height, status,
+                "Cổ tay ở trên vùng đầu tại thời điểm chạm cầu." if status == "observed"
+                else "Chưa thấy rõ cổ tay ở trên đầu tại thời điểm chạm cầu.",
                 threshold={"minimum": 0.0},
             ))
     else:
@@ -134,9 +134,9 @@ def evaluate_observable_criteria(
             drive_height = float((hip_contact[1] - wrist_contact[1]) / torso_height)
             status = "observed" if 0.15 <= drive_height <= 1.30 else "needs_review"
             output.append(_item(
-                "contact_drive_height", "Độ cao contact của drive", drive_height, status,
-                "Contact nằm trong vùng từ hông đến trên vai phù hợp cú drive."
-                if status == "observed" else "Độ cao contact nằm ngoài vùng drive tham khảo.",
+                "contact_drive_height", "Độ cao điểm chạm cầu của cú drive", drive_height, status,
+                "Điểm chạm cầu nằm trong vùng từ hông đến trên vai."
+                if status == "observed" else "Điểm chạm cầu nằm ngoài vùng drive tham khảo.",
                 threshold={"minimum": 0.15, "maximum": 1.30}, unit="torso_height_ratio",
             ))
 
@@ -147,14 +147,14 @@ def evaluate_observable_criteria(
             ahead = float(np.sign(facing) * (wrist_contact[0] - shoulder_contact[0]) / scale)
             status = "observed" if ahead >= -0.05 else "needs_review"
             output.append(_item(
-                "contact_ahead_of_body", "Contact ở phía trước cơ thể", ahead, status,
-                "Tay đánh nằm về phía trước hướng nhìn tại contact."
-                if status == "observed" else "Contact có dấu hiệu nằm lùi sau vai.",
+                "contact_ahead_of_body", "Điểm chạm cầu ở phía trước cơ thể", ahead, status,
+                "Tay đánh nằm về phía trước hướng nhìn khi chạm cầu."
+                if status == "observed" else "Điểm chạm cầu có dấu hiệu nằm lùi sau vai.",
                 threshold={"minimum": -0.05},
             ))
         else:
             output.append(_item(
-                "contact_ahead_of_body", "Contact ở phía trước cơ thể", None,
+                "contact_ahead_of_body", "Điểm chạm cầu ở phía trước cơ thể", None,
                 "unavailable", "Không xác định chắc chắn hướng nhìn từ camera này.",
             ))
 
@@ -203,12 +203,67 @@ def evaluate_observable_criteria(
             threshold={"maximum_degrees": threshold}, unit="degree",
         ))
 
+    racket_wrist_preparation = _median_point(keypoints, preparation, (racket_wrist,))
+    racket_shoulder_preparation = _median_point(
+        keypoints, preparation, (racket_shoulder,)
+    )
+    if racket_wrist_preparation is not None and racket_shoulder_preparation is not None:
+        preparation_height = float(
+            (racket_shoulder_preparation[1] - racket_wrist_preparation[1]) / scale
+        )
+        minimum_height = -0.20 if technique == "forehand_clear" else -0.45
+        status = "observed" if preparation_height >= minimum_height else "needs_review"
+        output.append(_item(
+            "racket_arm_preparation", "Vị trí tay vợt khi chuẩn bị",
+            preparation_height, status,
+            "Tay vợt được giữ ở vị trí sẵn sàng."
+            if status == "observed" else "Tay vợt ở khá thấp khi bắt đầu động tác.",
+            threshold={"minimum": minimum_height},
+        ))
+
+    elbow_values, reach_values = [], []
+    for frame in range(len(keypoints)):
+        racket_elbow = RIGHT_ELBOW if handedness == "right" else LEFT_ELBOW
+        if np.min(keypoints[frame, [racket_shoulder, racket_elbow, racket_wrist], 2]) < 0.3:
+            continue
+        elbow_values.append(_angle(
+            keypoints[frame, racket_shoulder, :2],
+            keypoints[frame, racket_elbow, :2],
+            keypoints[frame, racket_wrist, :2],
+        ))
+        reach_values.append(float(np.linalg.norm(
+            keypoints[frame, racket_wrist, :2]
+            - keypoints[frame, racket_shoulder, :2]
+        ) / scale))
+    finite_elbow = np.asarray([value for value in elbow_values if math.isfinite(value)])
+    if finite_elbow.size >= 10:
+        elbow_excursion = float(np.percentile(finite_elbow, 90) - np.percentile(finite_elbow, 10))
+        status = "observed" if elbow_excursion >= 25.0 else "needs_review"
+        output.append(_item(
+            "arm_extension_excursion", "Biên độ gập–duỗi tay đánh",
+            elbow_excursion, status,
+            "Tay đánh có thay đổi gập–duỗi rõ trong toàn động tác."
+            if status == "observed" else "Biên độ gập–duỗi tay đánh còn nhỏ.",
+            threshold={"minimum_degrees": 25.0}, unit="degree",
+        ))
+    finite_reach = np.asarray([value for value in reach_values if math.isfinite(value)])
+    if finite_reach.size >= 10:
+        reach_excursion = float(np.percentile(finite_reach, 90) - np.percentile(finite_reach, 10))
+        status = "observed" if reach_excursion >= 0.20 else "needs_review"
+        output.append(_item(
+            "arm_reach_excursion", "Biên độ vươn của tay đánh",
+            reach_excursion, status,
+            "Tay đánh có biên độ thu–vươn rõ."
+            if status == "observed" else "Biên độ vươn tay quan sát được còn nhỏ.",
+            threshold={"minimum": 0.20},
+        ))
+
     hip_preparation = _median_point(keypoints, preparation, (LEFT_HIP, RIGHT_HIP))
     if hip_preparation is not None and hip_contact is not None:
         transfer = float(np.linalg.norm(hip_contact - hip_preparation) / scale)
         status = "observed" if transfer >= 0.08 else "needs_review"
         output.append(_item(
-            "body_transfer", "Dịch chuyển thân từ chuẩn bị đến contact", transfer,
+            "body_transfer", "Dịch chuyển thân từ chuẩn bị đến chạm cầu", transfer,
             status, "Có chuyển động thân tham gia vào cú đánh."
             if status == "observed" else "Chuyển động thân quan sát được còn ít.",
             threshold={"minimum": 0.08},
@@ -219,9 +274,24 @@ def evaluate_observable_criteria(
         follow_distance = float(np.linalg.norm(wrist_follow - wrist_contact) / scale)
         status = "observed" if follow_distance >= 0.25 else "needs_review"
         output.append(_item(
-            "followthrough_completion", "Biên độ follow-through", follow_distance,
-            status, "Tay vợt tiếp tục di chuyển rõ sau contact."
+            "followthrough_completion", "Biên độ vung theo đà", follow_distance,
+            status, "Tay vợt tiếp tục di chuyển rõ sau khi chạm cầu."
             if status == "observed" else "Follow-through quan sát được còn ngắn.",
             threshold={"minimum": 0.25},
+        ))
+
+    hip_follow = _median_point(keypoints, follow, (LEFT_HIP, RIGHT_HIP))
+    left_ankle_follow = _median_point(keypoints, follow, (LEFT_ANKLE,))
+    right_ankle_follow = _median_point(keypoints, follow, (RIGHT_ANKLE,))
+    if hip_follow is not None and left_ankle_follow is not None and right_ankle_follow is not None:
+        low = min(left_ankle_follow[0], right_ankle_follow[0]) - 0.15 * scale
+        high = max(left_ankle_follow[0], right_ankle_follow[0]) + 0.15 * scale
+        outside = max(low - hip_follow[0], hip_follow[0] - high, 0.0) / scale
+        status = "observed" if outside <= 0 else "needs_review"
+        output.append(_item(
+            "recovery_balance", "Thăng bằng sau khi đánh", float(outside), status,
+            "Trọng tâm thân nằm trong vùng hỗ trợ của hai chân."
+            if status == "observed" else "Trọng tâm thân lệch khỏi vùng hỗ trợ của hai chân.",
+            threshold={"maximum": 0.0},
         ))
     return output

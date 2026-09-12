@@ -17,8 +17,8 @@ from pathlib import Path
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv"}
 TECHNIQUE_LABELS = {
-    "forehand_clear": "Forehand clear",
-    "backhand_drive": "Backhand drive",
+    "forehand_clear": "Forehand clear (phông cầu thuận tay)",
+    "backhand_drive": "Backhand drive (đánh cầu ngang trái tay)",
 }
 PHASE_LABELS = {
     "preparation": "Chuẩn bị",
@@ -36,6 +36,10 @@ IMPROVEMENT_TIPS = {
     "leg_loading": "Chùng gối thêm khi chuẩn bị để hỗ trợ phát lực.",
     "body_transfer": "Phối hợp chuyển trọng tâm và xoay thân rõ hơn.",
     "followthrough_completion": "Tiếp tục vung vợt tự nhiên sau khi tiếp xúc cầu.",
+    "racket_arm_preparation": "Giữ tay và đầu vợt cao hơn trước khi bắt đầu tăng tốc.",
+    "arm_extension_excursion": "Tạo chuỗi gập rồi duỗi tay rõ ràng, không khóa cứng khuỷu.",
+    "arm_reach_excursion": "Thu tay khi chuẩn bị và vươn tay rõ hơn khi đánh cầu.",
+    "recovery_balance": "Kết thúc với trọng tâm nằm giữa hai chân để phục hồi nhanh.",
 }
 
 
@@ -56,10 +60,42 @@ def _display_value(value: object, unit: str | None) -> str | None:
     if unit == "degree":
         return f"{number:.1f}°"
     if unit == "torso_height_ratio":
-        return f"{number:.2f} × chiều cao thân"
+        return f"{number * 100:.0f}% chiều cao thân"
     if unit == "body_scale_ratio":
-        return f"{number:.2f} × tỷ lệ cơ thể"
+        return f"{number * 100:.0f}% kích thước cơ thể chuẩn hóa"
     return f"{number:.2f}"
+
+
+def _display_observable_value(item: dict) -> str | None:
+    value = item.get("observed")
+    if value is None:
+        return None
+    number = float(value)
+    criterion = item["criterion"]
+    percent = abs(number) * 100
+    if criterion == "contact_above_head":
+        return (
+            f"cao hơn vùng đầu khoảng {percent:.0f}% kích thước cơ thể chuẩn hóa"
+            if number >= 0 else
+            f"thấp hơn vùng đầu khoảng {percent:.0f}% kích thước cơ thể chuẩn hóa"
+        )
+    if criterion == "contact_ahead_of_body":
+        return (
+            f"phía trước vai khoảng {percent:.0f}% kích thước cơ thể chuẩn hóa"
+            if number >= 0 else
+            f"phía sau vai khoảng {percent:.0f}% kích thước cơ thể chuẩn hóa"
+        )
+    if criterion == "racket_arm_preparation":
+        return (
+            f"cao hơn vai khoảng {percent:.0f}% kích thước cơ thể chuẩn hóa"
+            if number >= 0 else
+            f"thấp hơn vai khoảng {percent:.0f}% kích thước cơ thể chuẩn hóa"
+        )
+    if criterion == "non_racket_arm_coordination" and number < 0:
+        return f"chuyển động ngược chuỗi mong đợi khoảng {percent:.0f}%"
+    if criterion == "recovery_balance" and number <= 0:
+        return "trọng tâm nằm trong vùng hai chân"
+    return _display_value(value, item.get("unit"))
 
 
 def build_user_report(analysis: dict) -> dict:
@@ -79,7 +115,7 @@ def build_user_report(analysis: dict) -> dict:
             target = observed if item["status"] == "observed" else needs_review
             target.append({
                 "label": item["label"], "message": item["message"],
-                "value": _display_value(item.get("observed"), item.get("unit")),
+                "value": _display_observable_value(item),
                 "evidence": "visual_heuristic",
                 **(
                     {"suggestion": IMPROVEMENT_TIPS.get(item["criterion"])}
@@ -175,6 +211,10 @@ def build_user_report(analysis: dict) -> dict:
             f"Quan sát được {len(observed)} dấu hiệu, có {len(needs_review)} điểm "
             f"nên xem lại và {len(unavailable)} phép đo chưa thể kết luận."
         ),
+        "measurement_note": (
+            "Các giá trị phần trăm là khoảng cách đã chuẩn hóa theo kích thước "
+            "cơ thể của chính người chơi; 100% không phải điểm số."
+        ),
         "observed_signals": observed,
         "needs_review": needs_review,
         "reference_measurements": measurements,
@@ -198,12 +238,13 @@ def render_user_report_markdown(report: dict) -> str:
         f"- AI nhận diện: {recognition['message']}",
         f"- Chất lượng video: {quality['message']}",
         f"- Pose hợp lệ: {quality['pose_valid_percent']:.2f}%",
-        f"- Swing peak: {quality['swing_peak_seconds']} giây"
-        if quality["swing_peak_seconds"] is not None else "- Swing peak: chưa xác định",
-        "", report["summary"], "",
+        f"- Thời điểm vung nhanh nhất: {quality['swing_peak_seconds']} giây"
+        if quality["swing_peak_seconds"] is not None
+        else "- Thời điểm vung nhanh nhất: chưa xác định",
+        "", report["summary"], "", report["measurement_note"], "",
     ]
     sections = (
-        ("Dấu hiệu quan sát được", report["observed_signals"], "message"),
+        ("Dấu hiệu quan sát được (thử nghiệm)", report["observed_signals"], "message"),
         ("Điểm cần xem lại", report["needs_review"], "message"),
         ("Số liệu tham khảo", report["reference_measurements"], "note"),
         ("Chưa thể đánh giá", report["not_assessed"], "reason"),

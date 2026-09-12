@@ -42,6 +42,10 @@ def test_forehand_observations_include_contact_leg_and_followthrough():
     assert "contact_above_head" in names
     assert "leg_loading" in names
     assert "followthrough_completion" in names
+    assert "racket_arm_preparation" in names
+    assert "arm_extension_excursion" in names
+    assert "arm_reach_excursion" in names
+    assert "recovery_balance" in names
     assert all(item["evidence_level"] == "experimental_heuristic" for item in result)
 
 
