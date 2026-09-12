@@ -155,6 +155,24 @@ zone and uses the non-racket arm as a counterbalance cue. These observations
 are displayed separately from validated good signals and never create a
 numeric score or a hard deviation.
 
+## End-to-end phone video preview
+
+Run pose extraction, quality gates, technique rules, observable criteria, and
+the score-free user report with one command:
+
+```powershell
+python scripts/inference/analyze_technique.py `
+  "C:\Users\ADMIN\Downloads\stroke.mp4" forehand_clear `
+  --view side --handedness right
+```
+
+The default output is `outputs/<video>_analysis/` with `pose.npz`,
+`pose_preview.mp4`, `quality.json`, `technique_report.json`, and the combined
+`analysis.json`. Use `--pose existing_pose.npz` to skip pose extraction and
+`--no-preview` to skip rendering. Technique, view, and handedness are
+user-confirmed; an optional `--classifier-json` is recorded as a suggestion
+and never selects the rule set.
+
 ## Model workflows
 
 - `training/`: compatibility wrappers around external training frameworks.
