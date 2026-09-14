@@ -491,7 +491,7 @@ def main() -> None:
     technique = registry.technique(args.technique)
     sequence = load_pose(args.input)
     detected_view, projected_ratio = estimate_view_with_ratio(sequence)
-    camera_view_reliable = True
+    camera_view_reliable = detected_view in {args.view, "oblique", "unknown"}
     selected_view = args.view
     requested_views = (selected_view,)
     missing_views = [view for view in requested_views if view not in technique.views]
@@ -605,6 +605,7 @@ def main() -> None:
         observable_criteria = evaluate_observable_criteria(
             sequence, phases, args.technique, selected_view,
             handedness=args.handedness,
+            camera_view_reliable=camera_view_reliable,
         )
         report["strokes"].append({
             "stroke_id": 1,
@@ -659,6 +660,7 @@ def main() -> None:
         observable_criteria = evaluate_observable_criteria(
             clip_seq, phases, args.technique, selected_view,
             handedness=args.handedness,
+            camera_view_reliable=camera_view_reliable,
         )
         report["strokes"].append({
             "stroke_id": i,
@@ -841,7 +843,7 @@ def _practical_user_feedback(
                 "validation_status": "experimental_heuristic",
                 "reason": criterion["message"],
             })
-        else:
+        elif criterion["status"] in {"observed", "needs_review"}:
             heuristic_observations.append(criterion)
 
     if good_signals:

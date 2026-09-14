@@ -143,7 +143,7 @@ class StrokeGeometrySummary:
 def detect_stroke_phases(
     features: GeometryFeatures,
     *,
-    prep_speed_ratio: float = 0.15,
+    prep_speed_ratio: float = 0.30,
     contact_window_frames: int = 2,
     swing_peak_frame: int | None = None,
 ) -> PhaseBoundaries:
@@ -213,28 +213,58 @@ def detect_stroke_phases(
     )
     peak_speed = speed[contact_frame]
 
+    # Ignore a stationary lead-in commonly present in phone recordings. Three
+    # sustained moving frames are required so pose jitter cannot start the
+    # preparation phase by itself.
+    onset_threshold = max(0.5, float(peak_speed) * 0.05)
+    moving = valid & (speed >= onset_threshold)
+    active_start = 0
+    for frame in range(max(0, contact_frame - 2)):
+        if moving[frame : frame + 3].all():
+            active_start = frame
+            break
+
     # Scalar speed does not encode the direction reversal of a backswing.
     # Use the last sustained low-speed valley before the peak when available;
     # otherwise use conservative temporal fractions and mark implausible
     # layouts invalid below.
     threshold = peak_speed * prep_speed_ratio
-    low = valid[:contact_frame] & (speed[:contact_frame] <= threshold)
-    low_frames = np.flatnonzero(low)
-    reversal_frame = int(low_frames[-1] + 1) if low_frames.size else max(2, contact_frame // 2)
-    prep_end = max(1, reversal_frame // 2)
+    min_phase = max(1, int(round(frame_count * 0.03)))
+    low = valid[active_start:contact_frame] & (
+        speed[active_start:contact_frame] <= threshold
+    )
+    low_frames = np.flatnonzero(low) + active_start
+    reversal_frame = (
+        int(low_frames[-1] + 1)
+        if low_frames.size
+        else active_start + max(2, (contact_frame - active_start) // 2)
+    )
+    reversal_frame = min(
+        reversal_frame,
+        max(
+            active_start + min_phase,
+            contact_frame - contact_window_frames - min_phase,
+        ),
+    )
+    preparation_span = max(1, reversal_frame - active_start)
+    prep_end = min(
+        reversal_frame - 1,
+        active_start + max(1, int(round(preparation_span * 0.65))),
+    )
 
     contact_start = max(reversal_frame, contact_frame - contact_window_frames)
     contact_end = min(frame_count, contact_frame + contact_window_frames + 1)
 
     ranges = (
-        (0, prep_end),
+        (active_start, prep_end),
         (prep_end, reversal_frame),
         (reversal_frame, contact_start),
         (contact_start, contact_end),
         (contact_end, frame_count),
     )
-    min_phase = max(1, int(round(frame_count * 0.03)))
-    contact_ratio = contact_frame / max(frame_count - 1, 1)
+    contact_ratio = (contact_frame - active_start) / max(
+        frame_count - 1 - active_start, 1
+    )
     follow_ratio = (frame_count - contact_end) / frame_count
     plausible = (
         all(end - start >= min_phase for start, end in ranges)
@@ -253,7 +283,7 @@ def detect_stroke_phases(
         plausible = False
         reason = "ambiguous_contact_peaks"
     return PhaseBoundaries(
-        preparation=(0, prep_end),
+        preparation=(active_start, prep_end),
         backswing=(prep_end, reversal_frame),
         forward_swing=(reversal_frame, contact_start),
         contact_estimated=(contact_start, contact_end),
@@ -545,7 +575,7 @@ def summarize_stroke_geometry(
         "preparation", "backswing", "forward_swing",
         "contact_estimated", "follow_through",
     )
-    frame_count = max(len(features.timestamps), 1)
+    frame_count = max(phases.follow_through[1] - phases.preparation[0], 1)
     phase_ratios = {
         name: (getattr(phases, name)[1] - getattr(phases, name)[0]) / frame_count
         for name in phase_names

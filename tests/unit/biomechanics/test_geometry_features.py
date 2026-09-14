@@ -203,9 +203,9 @@ def test_detect_stroke_phases_splits_prep_backswing_forward_swing_contact_follow
     phases = detect_stroke_phases(features)
 
     assert phases.valid
-    assert phases.preparation == (0, 2)
-    assert phases.backswing == (2, 4)
-    assert phases.forward_swing == (4, 9)
+    assert phases.preparation == (4, 7)
+    assert phases.backswing == (7, 8)
+    assert phases.forward_swing == (8, 9)
     assert phases.contact_estimated == (9, 14)
     assert phases.follow_through == (14, 16)
     assert phases.contact_frame == 11
@@ -254,6 +254,23 @@ def test_detect_stroke_phases_accepts_mid_clip_contact_with_complete_recovery() 
     assert phases.valid
     assert 43 <= phases.contact_frame <= 47
     assert (88 - phases.contact_estimated[1]) / 88 > 0.45
+
+
+def test_detect_stroke_phases_excludes_stationary_phone_video_lead_in() -> None:
+    speed = np.array(
+        [0.02] * 14 + [0.8] * 8 + [2.0] * 8 + [0.6] * 5
+        + [4.0, 7.0, 10.0, 7.0, 4.0] + [2.0] * 8,
+        dtype=np.float32,
+    )
+    features = GeometryFeatures(
+        ("wrist_speed",), speed[:, None], np.ones((len(speed), 1), dtype=np.float32),
+        np.arange(len(speed), dtype=np.float32) / 30,
+    )
+
+    phases = detect_stroke_phases(features)
+
+    assert phases.valid
+    assert phases.preparation[0] >= 12
 
 
 def test_manual_swing_peak_overrides_automatic_candidate() -> None:

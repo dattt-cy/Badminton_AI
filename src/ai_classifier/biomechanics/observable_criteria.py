@@ -69,7 +69,25 @@ def _phase_knee_angle(keypoints: np.ndarray, frame_range: tuple[int, int]) -> fl
         finite = [value for value in per_side if math.isfinite(value)]
         if finite:
             values.append(min(finite))
-    return float(np.median(values)) if values else math.nan
+    # Loading is a deliberate low-angle moment, not the median posture of a
+    # long setup. A lower quartile is robust to one noisy frame while still
+    # capturing a sustained knee bend.
+    return float(np.percentile(values, 25)) if values else math.nan
+
+
+def _joint_elevation_values(
+    keypoints: np.ndarray,
+    frame_range: tuple[int, int],
+    wrist: int,
+    shoulder: int,
+    scale: float,
+) -> np.ndarray:
+    start, end = frame_range
+    confidence = np.min(keypoints[start:end, [wrist, shoulder], 2], axis=1)
+    elevation = (
+        keypoints[start:end, shoulder, 1] - keypoints[start:end, wrist, 1]
+    ) / scale
+    return elevation[(confidence >= 0.3) & np.isfinite(elevation)]
 
 
 def _item(
@@ -95,6 +113,7 @@ def evaluate_observable_criteria(
     view: str,
     *,
     handedness: str = "right",
+    camera_view_reliable: bool = True,
 ) -> list[dict]:
     """Describe visible technique cues without claiming expert validation."""
     if technique not in {"forehand_clear", "backhand_drive"} or not phases.valid:
@@ -117,16 +136,24 @@ def evaluate_observable_criteria(
     hip_contact = _median_point(keypoints, contact, (LEFT_HIP, RIGHT_HIP))
     head_contact = _median_point(keypoints, contact, (0, 1, 2, 3, 4))
     output = []
+    contact_confidence = float(getattr(phases, "contact_confidence", 0.0))
+    contact_reliable = contact_confidence >= 0.80
 
     if technique == "forehand_clear":
         if wrist_contact is not None and head_contact is not None:
             height = float((head_contact[1] - wrist_contact[1]) / scale)
-            status = "observed" if height >= 0 else "needs_review"
+            status = (
+                "unavailable" if not contact_reliable or -0.15 < height < 0.08
+                else "observed" if height >= 0.08
+                else "needs_review"
+            )
             output.append(_item(
                 "contact_above_head", "Điểm chạm cầu phía trên đầu", height, status,
                 "Cổ tay ở trên vùng đầu tại thời điểm chạm cầu." if status == "observed"
-                else "Chưa thấy rõ cổ tay ở trên đầu tại thời điểm chạm cầu.",
-                threshold={"minimum": 0.0},
+                else "Chưa thấy rõ cổ tay ở trên đầu tại thời điểm chạm cầu."
+                if status == "needs_review"
+                else "Không xác định đủ chắc chắn thời điểm tiếp xúc cầu từ pose 2D.",
+                threshold={"observed_minimum": 0.08, "review_maximum": -0.15},
             ))
     else:
         if wrist_contact is not None and shoulder_contact is not None and hip_contact is not None:
@@ -141,7 +168,10 @@ def evaluate_observable_criteria(
             ))
 
     nose = _median_point(keypoints, contact, (0,))
-    if view == "side" and nose is not None and shoulder_contact is not None and wrist_contact is not None:
+    if (
+        view == "side" and camera_view_reliable and contact_reliable
+        and nose is not None and shoulder_contact is not None and wrist_contact is not None
+    ):
         facing = float(nose[0] - shoulder_contact[0])
         if abs(facing) >= 0.04 * scale:
             ahead = float(np.sign(facing) * (wrist_contact[0] - shoulder_contact[0]) / scale)
@@ -158,27 +188,37 @@ def evaluate_observable_criteria(
                 "unavailable", "Không xác định chắc chắn hướng nhìn từ camera này.",
             ))
 
-    other_wrist_preparation = _median_point(keypoints, preparation, (other_wrist,))
-    other_shoulder_preparation = _median_point(keypoints, preparation, (other_shoulder,))
-    other_wrist_contact = _median_point(keypoints, contact, (other_wrist,))
-    if (
-        other_wrist_preparation is not None and other_shoulder_preparation is not None
-        and other_wrist_contact is not None
-    ):
-        elevation = float(
-            (other_shoulder_preparation[1] - other_wrist_preparation[1]) / scale
-        )
-        drop = float((other_wrist_contact[1] - other_wrist_preparation[1]) / scale)
+    precontact = (preparation[0], contact[0])
+    other_elevation = _joint_elevation_values(
+        keypoints, precontact, other_wrist, other_shoulder, scale
+    )
+    other_contact_elevation = _joint_elevation_values(
+        keypoints, contact, other_wrist, other_shoulder, scale
+    )
+    if other_elevation.size and other_contact_elevation.size:
+        peak_elevation = float(np.percentile(other_elevation, 90))
+        contact_elevation = float(np.median(other_contact_elevation))
+        drop = peak_elevation - contact_elevation
         if technique == "forehand_clear":
-            status = "observed" if elevation >= -0.10 and drop >= 0.05 else "needs_review"
+            status = (
+                "observed"
+                if peak_elevation >= 0.15 and drop >= 0.15
+                else "needs_review"
+            )
             message = (
                 "Tay không thuận có nâng định hướng rồi hạ khi tăng tốc."
                 if status == "observed" else
                 "Chưa thấy rõ chuỗi nâng–hạ của tay không thuận."
             )
         else:
+            other_wrist_contact = _median_point(
+                keypoints, contact, (other_wrist,)
+            )
+            other_shoulder_contact = _median_point(
+                keypoints, contact, (other_shoulder,)
+            )
             distance = float(np.linalg.norm(
-                other_wrist_contact - other_shoulder_preparation
+                other_wrist_contact - other_shoulder_contact
             ) / scale)
             status = "observed" if distance >= 0.25 else "needs_review"
             message = (
@@ -192,7 +232,7 @@ def evaluate_observable_criteria(
             threshold={"minimum": 0.05 if technique == "forehand_clear" else 0.25},
         ))
 
-    knee_angle = _phase_knee_angle(keypoints, preparation)
+    knee_angle = _phase_knee_angle(keypoints, precontact)
     if math.isfinite(knee_angle):
         threshold = 165.0 if technique == "forehand_clear" else 160.0
         status = "observed" if knee_angle <= threshold else "needs_review"
@@ -264,7 +304,7 @@ def evaluate_observable_criteria(
         status = "observed" if transfer >= 0.08 else "needs_review"
         output.append(_item(
             "body_transfer", "Dịch chuyển thân từ chuẩn bị đến chạm cầu", transfer,
-            status, "Có chuyển động thân tham gia vào cú đánh."
+            "informational", "Có chuyển động thân tham gia vào cú đánh."
             if status == "observed" else "Chuyển động thân quan sát được còn ít.",
             threshold={"minimum": 0.08},
         ))
@@ -294,4 +334,8 @@ def evaluate_observable_criteria(
             if status == "observed" else "Trọng tâm thân lệch khỏi vùng hỗ trợ của hai chân.",
             threshold={"maximum": 0.0},
         ))
+        if output[-1]["status"] == "observed":
+            # Hip-between-ankles is only a static observation; it cannot prove
+            # dynamic recovery quality after a stroke.
+            output[-1]["status"] = "informational"
     return output

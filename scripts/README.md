@@ -162,9 +162,13 @@ the score-free user report with one command:
 
 ```powershell
 python scripts/inference/analyze_technique.py `
-  "C:\Users\ADMIN\Downloads\stroke.mp4" forehand_clear `
+  "C:\Users\ADMIN\Downloads\stroke.mp4" auto `
   --view side --handedness right --run-classifier-wsl
 ```
+
+`auto` is also the default when the positional technique is omitted. An
+accepted classifier prediction selects the rule set; below the confidence
+gate the command stops and asks the caller to provide a technique explicitly.
 
 The default output is `outputs/<video>_analysis/` with `pose.npz`,
 `pose_preview.mp4`, `quality.json`, `technique_report.json`, and the combined
@@ -177,6 +181,14 @@ writes `classification.json`. `analysis.json` exposes a compact `user_summary`
 alongside the complete technical report. `user_report.json` is the compact
 frontend payload; `user_report.md` is the Vietnamese report a user can read
 directly without understanding internal rule names.
+
+The end-to-end command defaults to `configs/pose/yolov8.yaml`, matching the
+YOLOv8n/640 pose distribution used to train the action checkpoint. This same
+pose is reused by the quality and geometry stages, avoiding duplicate pose
+extraction and inconsistent classifier confidence. The stricter
+`yolov8_high_accuracy.yaml` profile remains available through `--pose-config`
+for controlled geometry experiments, but should not feed the current action
+checkpoint unless that checkpoint is retrained on the same profile.
 
 ## Model workflows
 

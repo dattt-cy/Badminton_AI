@@ -11,6 +11,7 @@ class Phases:
     forward_swing = (7, 10)
     contact_estimated = (10, 13)
     follow_through = (13, 16)
+    contact_confidence = 0.9
 
 
 def _sequence():
@@ -56,3 +57,38 @@ def test_backhand_uses_drive_contact_height_instead_of_overhead_contact():
     names = {item["criterion"] for item in result}
     assert "contact_drive_height" in names
     assert "contact_above_head" not in names
+
+
+def test_non_racket_arm_uses_peak_before_contact_not_short_preparation_only():
+    sequence = _sequence()
+    # The arm starts low, rises during the backswing, then drops at contact.
+    sequence.keypoints[:4, 9, :2] = [35, 55]
+    sequence.keypoints[4:9, 9, :2] = [35, 15]
+    sequence.keypoints[10:13, 9, :2] = [40, 55]
+
+    result = evaluate_observable_criteria(
+        sequence, Phases(), "forehand_clear", "front"
+    )
+    coordination = next(
+        item for item in result
+        if item["criterion"] == "non_racket_arm_coordination"
+    )
+
+    assert coordination["status"] == "observed"
+
+
+def test_borderline_contact_is_unavailable_instead_of_coaching_error():
+    sequence = _sequence()
+    # Put the racket wrist almost level with the face: too close to a noisy
+    # zero threshold to justify either praise or correction.
+    sequence.keypoints[10:13, 10, :2] = [90, 5]
+
+    result = evaluate_observable_criteria(
+        sequence, Phases(), "forehand_clear", "front"
+    )
+    contact = next(
+        item for item in result if item["criterion"] == "contact_above_head"
+    )
+
+    assert contact["status"] == "unavailable"
+    assert "không xác định" in contact["message"].lower()

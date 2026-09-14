@@ -9,6 +9,20 @@ Pipeline AI phan tich ky thuat cau long tu video:
 5. Error detection: phat hien loi theo tung dong tac va tung pha.
 6. RAG: truy xuat tai lieu va tao huong dan khac phuc.
 
+## AI service
+
+FastAPI exposes the end-to-end phone-video workflow as isolated asynchronous
+jobs. Install the optional dependencies and start the service:
+
+```bash
+python -m pip install -e ".[api]"
+badminton-ai-api
+```
+
+Open `http://127.0.0.1:8000/` for the video upload interface or `/docs` for
+the interactive API. Configuration, endpoint usage, and deployment constraints are documented in
+[`docs/api_service.md`](docs/api_service.md).
+
 ## Cau truc du an
 
 ```text

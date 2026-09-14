@@ -36,10 +36,60 @@ IMPROVEMENT_TIPS = {
     "leg_loading": "Chùng gối thêm khi chuẩn bị để hỗ trợ phát lực.",
     "body_transfer": "Phối hợp chuyển trọng tâm và xoay thân rõ hơn.",
     "followthrough_completion": "Tiếp tục vung vợt tự nhiên sau khi tiếp xúc cầu.",
-    "racket_arm_preparation": "Giữ tay và đầu vợt cao hơn trước khi bắt đầu tăng tốc.",
+    "racket_arm_preparation": "Đưa bàn tay cầm vợt lên gần ngang vai trước khi bắt đầu tăng tốc.",
     "arm_extension_excursion": "Tạo chuỗi gập rồi duỗi tay rõ ràng, không khóa cứng khuỷu.",
     "arm_reach_excursion": "Thu tay khi chuẩn bị và vươn tay rõ hơn khi đánh cầu.",
     "recovery_balance": "Kết thúc với trọng tâm nằm giữa hai chân để phục hồi nhanh.",
+}
+PRACTICE_DRILLS = {
+    "racket_arm_preparation": [
+        "Dừng lại ở tư thế chuẩn bị trước khi vung.",
+        "Đưa bàn tay cầm vợt lên gần ngang vai.",
+        "Thực hiện chậm 5 lần, sau đó quay lại để so sánh.",
+    ],
+    "contact_above_head": [
+        "Đứng dưới điểm cầu tưởng tượng và đưa tay lên cao.",
+        "Vươn người thoải mái, không khóa cứng khuỷu tay.",
+        "Thực hiện chậm 5 lần rồi mới tăng tốc.",
+    ],
+    "leg_loading": [
+        "Đứng với hai chân rộng vừa phải.",
+        "Chùng nhẹ hai gối trước khi bắt đầu vung.",
+        "Duỗi chân cùng lúc tay vợt tăng tốc, lặp lại 5 lần.",
+    ],
+}
+OBSERVABLE_LABELS = {
+    "arm_extension_excursion": "Tay co rồi duỗi khi vung",
+    "arm_reach_excursion": "Tay có thu–vươn rõ",
+    "followthrough_completion": "Vung theo đà",
+    "racket_arm_preparation": "Tư thế tay cầm vợt",
+}
+OBSERVABLE_MESSAGES = {
+    "racket_arm_preparation": "Bàn tay cầm vợt được đưa vào vị trí sẵn sàng.",
+    "followthrough_completion": "Tay đánh tiếp tục di chuyển rõ sau vùng tăng tốc ước tính.",
+}
+REVIEW_LABELS = {
+    "wrist_vertical_excursion": "Đường vung từ thấp lên cao",
+}
+FRIENDLY_VALIDATED_SIGNALS = {
+    "torso_lean": (
+        "Kiểm soát thân người",
+        "Thân người không nghiêng quá nhiều khi tăng tốc.",
+    ),
+    "stance_width": (
+        "Khoảng cách hai chân",
+        "Hai chân tạo được vùng đứng ổn định khi chuẩn bị.",
+    ),
+}
+REVIEW_TIPS = {
+    ("wrist_shoulder_distance", "preparation"):
+        "Kiểm tra xem tay vợt đã được đưa lên sớm và thoải mái chưa.",
+    ("wrist_shoulder_distance", "contact_estimated"):
+        "Kiểm tra xem tay đánh có vươn thoải mái ở vùng tiếp xúc không.",
+    ("wrist_shoulder_distance", "follow_through"):
+        "Kiểm tra xem tay vợt có tiếp tục đi hết theo đà sau cú đánh không.",
+    ("wrist_vertical_excursion", None):
+        "Kiểm tra xem đường vung có đi từ thấp lên cao đủ rõ không.",
 }
 
 
@@ -59,10 +109,10 @@ def _display_value(value: object, unit: str | None) -> str | None:
     number = float(value)
     if unit == "degree":
         return f"{number:.1f}°"
-    if unit == "torso_height_ratio":
-        return f"{number * 100:.0f}% chiều cao thân"
-    if unit == "body_scale_ratio":
-        return f"{number * 100:.0f}% kích thước cơ thể chuẩn hóa"
+    if unit in {"torso_height_ratio", "body_scale_ratio"}:
+        # Normalized distances are useful for audit/model logic but are not
+        # meaningful coaching units for a recreational player.
+        return None
     return f"{number:.2f}"
 
 
@@ -72,62 +122,117 @@ def _display_observable_value(item: dict) -> str | None:
         return None
     number = float(value)
     criterion = item["criterion"]
-    percent = abs(number) * 100
     if criterion == "contact_above_head":
-        return (
-            f"cao hơn vùng đầu khoảng {percent:.0f}% kích thước cơ thể chuẩn hóa"
-            if number >= 0 else
-            f"thấp hơn vùng đầu khoảng {percent:.0f}% kích thước cơ thể chuẩn hóa"
-        )
+        return "ở trên đầu" if number >= 0 else "chưa ở trên đầu"
     if criterion == "contact_ahead_of_body":
-        return (
-            f"phía trước vai khoảng {percent:.0f}% kích thước cơ thể chuẩn hóa"
-            if number >= 0 else
-            f"phía sau vai khoảng {percent:.0f}% kích thước cơ thể chuẩn hóa"
-        )
+        return "ở phía trước vai" if number >= 0 else "vẫn ở phía sau vai"
     if criterion == "racket_arm_preparation":
-        return (
-            f"cao hơn vai khoảng {percent:.0f}% kích thước cơ thể chuẩn hóa"
-            if number >= 0 else
-            f"thấp hơn vai khoảng {percent:.0f}% kích thước cơ thể chuẩn hóa"
-        )
+        return "cao hơn vai" if number >= 0 else "thấp hơn vai"
     if criterion == "non_racket_arm_coordination" and number < 0:
-        return f"chuyển động ngược chuỗi mong đợi khoảng {percent:.0f}%"
+        return "chưa phối hợp đúng nhịp"
     if criterion == "recovery_balance" and number <= 0:
         return "trọng tâm nằm trong vùng hai chân"
     return _display_value(value, item.get("unit"))
 
 
+def _phase_evidence(
+    stroke: dict, phase: str | None, fps: float,
+) -> dict | None:
+    phases = stroke.get("phases", {})
+    frame_range = phases.get(phase) if phase else None
+    if not frame_range or len(frame_range) != 2 or fps <= 0:
+        return None
+    offset = int(stroke.get("start_frame", 0))
+    frame = offset + int(round((frame_range[0] + frame_range[1] - 1) / 2))
+    return {
+        "frame": frame,
+        "seconds": round(frame / fps, 2),
+        "label": f"Xem chậm đoạn {frame / fps:.2f}s",
+    }
+
+
+def _criterion_evidence(criterion: str, stroke: dict, fps: float) -> dict | None:
+    phase = {
+        "contact_above_head": "contact_estimated",
+        "contact_ahead_of_body": "contact_estimated",
+        "contact_drive_height": "contact_estimated",
+        "non_racket_arm_coordination": "backswing",
+        "leg_loading": "preparation",
+        "racket_arm_preparation": "preparation",
+        "arm_extension_excursion": "forward_swing",
+        "arm_reach_excursion": "forward_swing",
+        "body_transfer": "forward_swing",
+        "followthrough_completion": "follow_through",
+        "recovery_balance": "follow_through",
+    }.get(criterion)
+    return _phase_evidence(stroke, phase, fps)
+
+
+def _measurement_evidence(
+    feature: str | None, phase: str | None, stroke: dict, fps: float,
+) -> dict | None:
+    evidence_phase = phase or {
+        "wrist_vertical_excursion": "forward_swing",
+        "wrist_path_length": "forward_swing",
+    }.get(feature)
+    return _phase_evidence(stroke, evidence_phase, fps)
+
+
 def build_user_report(analysis: dict) -> dict:
     """Reduce the technical analysis to one plain-language frontend payload."""
     classifier = analysis.get("classifier_suggestion")
+    selected_by_user = (
+        analysis["selection"].get("source", "user_confirmed") == "user_confirmed"
+    )
     quality = analysis["quality"]
     feedback = analysis.get("user_feedback", [])
     observed, needs_review, measurements, unavailable = [], [], [], []
-    for block in feedback:
+    fps = float(quality.get("fps") or 0)
+    strokes = analysis.get("strokes", [])
+    for block_index, block in enumerate(feedback):
+        stroke = strokes[block_index] if block_index < len(strokes) else {}
         for item in block.get("good_signals", []):
+            friendly = FRIENDLY_VALIDATED_SIGNALS.get(item.get("feature"))
             observed.append({
-                "label": item["label"], "message": item["message"],
+                "label": friendly[0] if friendly else item["label"],
+                "message": friendly[1] if friendly else item["message"],
                 "value": _display_value(item.get("observed"), item.get("unit")),
                 "evidence": "validated",
+                "moment": _phase_evidence(stroke, item.get("phase"), fps),
             })
         for item in block.get("heuristic_observations", []):
             target = observed if item["status"] == "observed" else needs_review
             target.append({
-                "label": item["label"], "message": item["message"],
+                "criterion": item["criterion"],
+                "label": OBSERVABLE_LABELS.get(item["criterion"], item["label"]),
+                "message": OBSERVABLE_MESSAGES.get(
+                    item["criterion"], item["message"]
+                ),
                 "value": _display_observable_value(item),
                 "evidence": "visual_heuristic",
+                "moment": _criterion_evidence(item["criterion"], stroke, fps),
                 **(
-                    {"suggestion": IMPROVEMENT_TIPS.get(item["criterion"])}
+                    {
+                        "suggestion": IMPROVEMENT_TIPS.get(item["criterion"]),
+                        "drill": PRACTICE_DRILLS.get(item["criterion"], []),
+                    }
                     if item["status"] == "needs_review" else {}
                 ),
             })
         for item in block.get("observations_for_review", []):
             measurements.append({
-                "label": item["label"],
+                "feature": item.get("feature"),
+                "label": REVIEW_LABELS.get(item.get("feature"), item["label"]),
                 "phase": PHASE_LABELS.get(item.get("phase"), item.get("phase")),
                 "value": _display_value(item.get("observed"), item.get("unit")),
-                "note": "Số liệu tham khảo, chưa dùng để kết luận đúng hoặc sai.",
+                "note": "AI chưa đủ chắc để kết luận đây là lỗi.",
+                "suggestion": REVIEW_TIPS.get(
+                    (item.get("feature"), item.get("phase")),
+                    "Hãy xem lại video pose hoặc quay thêm một clip rõ hơn.",
+                ),
+                "moment": _measurement_evidence(
+                    item.get("feature"), item.get("phase"), stroke, fps
+                ),
             })
         for item in block.get("not_assessed", []):
             unavailable.append({
@@ -137,8 +242,33 @@ def build_user_report(analysis: dict) -> dict:
                 "reason": item["reason"],
             })
 
+    # A positive/negative preparation-hand observation and an uncertain reach
+    # measurement describe the same visible moment to a recreational player.
+    # Keep the actionable observation and remove the apparently contradictory
+    # duplicate from the uncertainty list.
+    if any(
+        item.get("criterion") == "racket_arm_preparation"
+        for item in observed + needs_review
+    ):
+        measurements = [
+            item for item in measurements
+            if not (
+                item.get("feature") == "wrist_shoulder_distance"
+                and item.get("phase") == PHASE_LABELS["preparation"]
+            )
+        ]
+
     motion = quality.get("motion_proposals", [])
-    peak_time = motion[0].get("peak_time") if motion else None
+    strokes = analysis.get("strokes", [])
+    phases = strokes[0].get("phases", {}) if strokes else {}
+    contact_frame = phases.get("contact_frame")
+    fps = quality.get("fps")
+    peak_time = (
+        float(contact_frame) / float(fps)
+        if contact_frame is not None and fps
+        else max(motion, key=lambda item: item.get("peak_score", 0)).get("peak_time")
+        if motion else None
+    )
     predicted_label = (
         TECHNIQUE_LABELS.get(classifier.get("label"), classifier.get("label"))
         if classifier else None
@@ -148,6 +278,9 @@ def build_user_report(analysis: dict) -> dict:
     )
     if classifier:
         recognition_message = (
+            f"AI tự nhận diện {predicted_label} ({classifier_confidence:.2f}%)."
+            if not selected_by_user and classifier.get("accepted")
+            else
             f"AI nhận diện {predicted_label} ({classifier_confidence:.2f}%), "
             "trùng với kỹ thuật đã chọn."
             if classifier.get("agreement_status") == "confirmed"
@@ -172,17 +305,54 @@ def build_user_report(analysis: dict) -> dict:
         quality_message = "Video đủ chất lượng để phân tích hình học."
     else:
         quality_message = "Video chưa đủ chất lượng; hãy quay lại theo hướng dẫn."
+    if not quality.get("geometry_feasible"):
+        summary = "Video này chưa đủ rõ để AI đưa ra hướng dẫn kỹ thuật đáng tin cậy."
+    elif needs_review:
+        summary = (
+            "Trong lần tập tiếp theo, hãy tập trung vào một việc: "
+            f"{needs_review[0]['suggestion']}"
+        )
+    elif observed:
+        summary = "Không phát hiện điểm cần ưu tiên sửa từ góc quay này."
+    else:
+        summary = "AI chưa có đủ bằng chứng để đưa ra hướng dẫn kỹ thuật."
+    primary_focus = None
+    if needs_review:
+        primary_focus = {
+            "label": needs_review[0]["label"],
+            "observation": needs_review[0]["message"],
+            "action": needs_review[0].get("suggestion"),
+            "moment": needs_review[0].get("moment"),
+            "drill": needs_review[0].get("drill", []),
+        }
+    view_check = analysis.get("camera_view_check") or {}
+    detected_view = view_check.get("detected_body_projection")
+    selected_view = analysis["selection"]["view"]
+    view_warning = (
+        "Video có góc quay chéo; một số phép đo cần camera chính diện hoặc "
+        "góc bên rõ ràng nên sẽ không được dùng để kết luận."
+        if detected_view == "oblique"
+        else "Góc quay đã chọn không khớp hướng cơ thể quan sát được trong video."
+        if detected_view in {"front", "side"} and detected_view != selected_view
+        else None
+    )
     return {
-        "version": 1,
+        "version": 4,
         "title": f"Kết quả phân tích {TECHNIQUE_LABELS[analysis['selection']['technique']]}",
         "status": {
             "code": analysis["overall"],
-            "label": {
+            "label": (
+                "Đã phân tích — có nội dung cần xem lại"
+                if needs_review else {
                 "observable_good_signals": "Có dấu hiệu tốt quan sát được",
-                "review_available": "Đã phân tích — có nội dung cần xem lại",
+                "review_available": (
+                    "Đã phân tích — có nội dung cần xem lại"
+                    if needs_review else "Đã phân tích"
+                ),
                 "insufficient_video_quality": "Video chưa đủ chất lượng",
                 "insufficient_data": "Chưa đủ dữ liệu để phân tích",
-            }.get(analysis["overall"], "Đã phân tích"),
+                }.get(analysis["overall"], "Đã phân tích")
+            ),
         },
         "technique": {
             "selected": analysis["selection"]["technique"],
@@ -191,7 +361,7 @@ def build_user_report(analysis: dict) -> dict:
             "view_label": VIEW_LABELS[analysis["selection"]["view"]],
             "handedness": analysis["selection"]["handedness"],
             "handedness_label": HAND_LABELS[analysis["selection"]["handedness"]],
-            "selected_by_user": True,
+            "selected_by_user": selected_by_user,
         },
         "recognition": recognition,
         "video_quality": {
@@ -205,15 +375,15 @@ def build_user_report(analysis: dict) -> dict:
                 float(quality.get("trajectory_quality", {}).get("median_scale_px", 0)), 1
             ),
             "swing_peak_seconds": round(float(peak_time), 2) if peak_time is not None else None,
+            "fps": round(float(quality.get("fps") or 30.0), 3),
             "issues": quality.get("reasons", []),
+            "view_warning": view_warning,
         },
-        "summary": (
-            f"Quan sát được {len(observed)} dấu hiệu, có {len(needs_review)} điểm "
-            f"nên xem lại và {len(unavailable)} phép đo chưa thể kết luận."
-        ),
+        "summary": summary,
+        "primary_focus": primary_focus,
         "measurement_note": (
-            "Các giá trị phần trăm là khoảng cách đã chuẩn hóa theo kích thước "
-            "cơ thể của chính người chơi; 100% không phải điểm số."
+            "Các số đo chuyên môn được giữ trong báo cáo kỹ thuật; phần này chỉ "
+            "trình bày những điều người chơi có thể áp dụng."
         ),
         "observed_signals": observed,
         "needs_review": needs_review,
@@ -232,22 +402,21 @@ def render_user_report_markdown(report: dict) -> str:
     lines = [
         f"# {report['title']}", "",
         f"**Trạng thái:** {report['status']['label']}", "",
-        f"- Kỹ thuật đã chọn: {technique['label']}",
+        f"- {'Kỹ thuật đã chọn' if technique['selected_by_user'] else 'Kỹ thuật AI nhận diện'}: {technique['label']}",
         f"- Góc quay: {technique['view_label']}",
         f"- Tay thuận: {technique['handedness_label']}",
         f"- AI nhận diện: {recognition['message']}",
         f"- Chất lượng video: {quality['message']}",
-        f"- Pose hợp lệ: {quality['pose_valid_percent']:.2f}%",
         f"- Thời điểm vung nhanh nhất: {quality['swing_peak_seconds']} giây"
         if quality["swing_peak_seconds"] is not None
         else "- Thời điểm vung nhanh nhất: chưa xác định",
-        "", report["summary"], "", report["measurement_note"], "",
+        "", report["summary"], "",
     ]
     sections = (
-        ("Dấu hiệu quan sát được (thử nghiệm)", report["observed_signals"], "message"),
-        ("Điểm cần xem lại", report["needs_review"], "message"),
-        ("Số liệu tham khảo", report["reference_measurements"], "note"),
-        ("Chưa thể đánh giá", report["not_assessed"], "reason"),
+        ("Dấu hiệu quan sát được", report["observed_signals"], "message"),
+        ("Nên cải thiện", report["needs_review"], "message"),
+        ("Cần quan sát thêm", report["reference_measurements"][:2], "suggestion"),
+        ("Giới hạn của lần phân tích", report["not_assessed"], "reason"),
     )
     for title, items, message_key in sections:
         lines.extend([f"## {title}", ""])
@@ -258,12 +427,10 @@ def render_user_report_markdown(report: dict) -> str:
             details = []
             if item.get("phase"):
                 details.append(str(item["phase"]))
-            if item.get("value"):
-                details.append(str(item["value"]))
             suffix = f" ({'; '.join(details)})" if details else ""
             lines.append(f"- **{item['label']}**{suffix}: {item[message_key]}")
-            if item.get("suggestion"):
-                lines.append(f"  Gợi ý: {item['suggestion']}")
+            if item.get("suggestion") and message_key != "suggestion":
+                lines.append(f"  Cách cải thiện: {item['suggestion']}")
         lines.append("")
     lines.extend(["---", "", report["disclaimer"], ""])
     return "\n".join(lines)
@@ -281,6 +448,7 @@ def assemble_analysis(
     technique_report: dict | None,
     preview: Path | None,
     classifier_suggestion: dict | None,
+    selection_source: str = "user_confirmed",
 ) -> dict:
     strokes = technique_report.get("strokes", []) if technique_report else []
     feedback = [stroke.get("user_feedback") for stroke in strokes]
@@ -364,7 +532,7 @@ def assemble_analysis(
             "technique": technique,
             "view": view,
             "handedness": handedness,
-            "source": "user_confirmed",
+            "source": selection_source,
             "classifier_used_for_rules": False,
         },
         "classifier_suggestion": classifier,
@@ -372,6 +540,9 @@ def assemble_analysis(
         "overall": overall,
         "score": None,
         "quality": quality,
+        "camera_view_check": (
+            technique_report.get("view_selection") if technique_report else None
+        ),
         "strokes": strokes,
         "user_feedback": feedback,
         "artifacts": {
@@ -393,14 +564,21 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("video", type=Path)
     parser.add_argument(
-        "technique", choices=("forehand_clear", "backhand_drive")
+        "technique", nargs="?",
+        choices=("auto", "forehand_clear", "backhand_drive"), default="auto",
+        help="Technique to assess; auto uses the accepted classifier prediction.",
     )
     parser.add_argument("--view", choices=("front", "side"), required=True)
     parser.add_argument("--handedness", choices=("left", "right"), default="right")
     parser.add_argument("--target", choices=("any", "single", "far", "near"), default="single")
     parser.add_argument(
         "--pose-config", type=Path,
-        default=Path("configs/pose/yolov8_high_accuracy.yaml"),
+        default=Path("configs/pose/yolov8.yaml"),
+        help=(
+            "Pose profile used by the complete pipeline. The default matches "
+            "the pose distribution used to train the action classifier; pass "
+            "yolov8_high_accuracy.yaml explicitly for geometry-only experiments."
+        ),
     )
     parser.add_argument("--pose", type=Path, help="Reuse an existing pose NPZ")
     parser.add_argument("--output-dir", type=Path)
@@ -477,36 +655,22 @@ def main() -> None:
     quality = json.loads(quality_path.read_text(encoding="utf-8"))
 
     preview = None
+    skeleton_preview = None
     if not args.no_preview:
         preview = output_dir / "pose_preview.mp4"
         run_command([
             sys.executable, str(repo_root / "scripts/inference/render_pose.py"),
             str(video), str(pose), str(preview),
         ], cwd=repo_root)
-
-    report_path = output_dir / "technique_report.json"
-    technique_report = None
-    if quality.get("geometry_feasible", False):
-        command = [
-            sys.executable,
-            str(repo_root / "scripts/evaluation/check_technique_rules.py"),
-            str(pose), args.technique,
-            "--view", args.view,
-            "--handedness", args.handedness,
-            "--floor-angle-degrees", str(args.floor_angle_degrees),
-            "--segmentation-mode", args.segmentation_mode,
-            "--output", str(report_path),
-        ]
-        if args.swing_peak_frame is not None:
-            command.extend(["--swing-peak-frame", str(args.swing_peak_frame)])
-        run_command(command, cwd=repo_root)
-        if report_path.is_file():
-            technique_report = json.loads(report_path.read_text(encoding="utf-8"))
-            technique_report["_path"] = str(report_path)
+        skeleton_preview = output_dir / "skeleton_preview.mp4"
+        run_command([
+            sys.executable, str(repo_root / "scripts/inference/render_pose.py"),
+            str(video), str(pose), str(skeleton_preview), "--skeleton-only",
+        ], cwd=repo_root)
 
     classifier_suggestion = None
     classifier_path = output_dir / "classification.json"
-    if args.run_classifier_wsl:
+    if args.run_classifier_wsl or (args.technique == "auto" and not args.classifier_json):
         checkpoint = (
             args.classifier_checkpoint if args.classifier_checkpoint.is_absolute()
             else repo_root / args.classifier_checkpoint
@@ -532,14 +696,51 @@ def main() -> None:
         classifier_path = args.classifier_json.resolve()
         classifier_suggestion = json.loads(classifier_path.read_text(encoding="utf-8"))
 
+    technique = args.technique
+    selection_source = "user_confirmed"
+    if technique == "auto":
+        if not classifier_suggestion or not classifier_suggestion.get("accepted"):
+            raise ValueError(
+                "AI could not identify the technique confidently. "
+                "Choose forehand_clear or backhand_drive explicitly."
+            )
+        technique = str(classifier_suggestion.get("label"))
+        if technique not in {"forehand_clear", "backhand_drive"}:
+            raise ValueError(f"Unsupported classifier label: {technique}")
+        selection_source = "classifier"
+
+    report_path = output_dir / "technique_report.json"
+    technique_report = None
+    if quality.get("geometry_feasible", False):
+        command = [
+            sys.executable,
+            str(repo_root / "scripts/evaluation/check_technique_rules.py"),
+            str(pose), technique,
+            "--view", args.view,
+            "--handedness", args.handedness,
+            "--floor-angle-degrees", str(args.floor_angle_degrees),
+            "--segmentation-mode", args.segmentation_mode,
+            "--output", str(report_path),
+        ]
+        if args.swing_peak_frame is not None:
+            command.extend(["--swing-peak-frame", str(args.swing_peak_frame)])
+        run_command(command, cwd=repo_root)
+        if report_path.is_file():
+            technique_report = json.loads(report_path.read_text(encoding="utf-8"))
+            technique_report["_path"] = str(report_path)
+
     analysis = assemble_analysis(
-        video=video, pose=pose, technique=args.technique, view=args.view,
+        video=video, pose=pose, technique=technique, view=args.view,
         handedness=args.handedness, pose_config=pose_config, quality=quality,
         technique_report=technique_report, preview=preview,
         classifier_suggestion=classifier_suggestion,
+        selection_source=selection_source,
     )
     analysis["artifacts"]["classification"] = (
         str(classifier_path) if classifier_suggestion is not None else None
+    )
+    analysis["artifacts"]["skeleton_preview"] = (
+        str(skeleton_preview) if skeleton_preview else None
     )
     user_report = build_user_report(analysis)
     user_report_json_path = output_dir / "user_report.json"

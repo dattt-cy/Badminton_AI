@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#102c27">
+  <title>Badminton Form Lab</title>
+  <style>
+    :root {
+      --ink: #102c27; --muted: #64746f; --line: #dce5df; --paper: #fbfcf8;
+      --lime: #dfff45; --green: #176b55; --green-soft: #e8f4ee;
+      --orange: #f26b38; --orange-soft: #fff0e8; --red: #b73c31;
+      --shadow: 0 24px 70px rgba(16, 44, 39, .13);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: #edf1eb; font: 15px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    .shell { min-height: 100vh; background: radial-gradient(circle at 85% 5%, #dfff4570 0, transparent 26rem), linear-gradient(145deg, #f9fbf4 0 64%, #e5ece5 64%); }
+    header { max-width: 1180px; margin: auto; padding: 30px 24px 18px; display: flex; align-items: center; justify-content: space-between; }
+    .brand { display: flex; gap: 11px; align-items: center; font-weight: 850; letter-spacing: -.03em; font-size: 19px; }
+    .mark { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--ink); color: var(--lime); font-size: 20px; }
+    .server { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 13px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #a0aaa5; }
+    .dot.on { background: #20a56e; box-shadow: 0 0 0 4px #20a56e22; }
+    main { max-width: 1180px; margin: auto; padding: 20px 24px 70px; }
+    .intro { max-width: 720px; margin-bottom: 34px; }
+    .eyebrow { color: var(--green); font-weight: 800; text-transform: uppercase; letter-spacing: .12em; font-size: 12px; }
+    h1 { font-size: clamp(38px, 6vw, 68px); line-height: .99; letter-spacing: -.055em; margin: 10px 0 18px; }
+    .intro p { color: var(--muted); font-size: 17px; max-width: 590px; margin: 0; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(330px, .9fr); gap: 20px; align-items: start; }
+    .card { background: var(--paper); border: 1px solid #fff; border-radius: 24px; box-shadow: var(--shadow); overflow: hidden; }
+    .media { min-height: 440px; background: var(--ink); position: relative; display: grid; place-items: center; }
+    .media video { width: 100%; height: 100%; max-height: 540px; object-fit: contain; display: none; }
+    .drop { position: absolute; inset: 22px; border: 1.5px dashed #ffffff62; border-radius: 18px; color: white; display: grid; place-items: center; text-align: center; padding: 30px; transition: .2s; }
+    .drop.drag { border-color: var(--lime); background: #dfff4515; transform: scale(.99); }
+    .drop-icon { width: 64px; height: 64px; margin: auto auto 18px; border-radius: 18px; background: var(--lime); color: var(--ink); display: grid; place-items: center; font-size: 30px; transform: rotate(-4deg); }
+    .drop strong { display: block; font-size: 20px; margin-bottom: 5px; }
+    .drop small { color: #b7c5c0; }
+    .pick { border: 0; border-radius: 99px; background: white; color: var(--ink); font-weight: 750; padding: 11px 18px; margin-top: 18px; }
+    .file-meta { position: absolute; left: 18px; right: 18px; bottom: 18px; background: #0a201de6; backdrop-filter: blur(12px); color: white; border-radius: 14px; padding: 11px 14px; display: none; justify-content: space-between; gap: 12px; }
+    .file-meta small { color: #adc0b8; }
+    .clear { border: 0; background: none; color: var(--lime); font-weight: 750; }
+    .form { padding: 28px; }
+    .form h2, .result h2 { margin: 0 0 6px; font-size: 24px; letter-spacing: -.035em; }
+    .sub { color: var(--muted); margin: 0 0 24px; }
+    label { display: block; font-size: 13px; font-weight: 780; margin: 18px 0 7px; }
+    select { width: 100%; appearance: none; border: 1px solid var(--line); background: white url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%23102c27'%3E%3Cpath d='m3 6 5 5 5-5'/%3E%3C/svg%3E") no-repeat right 14px center; padding: 13px 42px 13px 14px; border-radius: 12px; color: var(--ink); }
+    select:focus { outline: 3px solid #dfff4560; border-color: var(--green); }
+    .checks { margin-top: 21px; padding: 14px; background: #f0f4ef; border-radius: 13px; }
+    .auto-detect { margin: 18px 0 22px; padding: 15px; border-radius: 13px; background: var(--green-soft); color: var(--green); }
+    .auto-detect strong { display: block; color: var(--ink); margin-bottom: 2px; }
+    .fallback { display: none; }
+    .check { margin: 0; display: flex; gap: 10px; align-items: center; font-weight: 650; }
+    .check input { width: 17px; height: 17px; accent-color: var(--green); }
+    .hint { color: var(--muted); font-size: 12px; margin: 5px 0 0 27px; }
+    .submit { width: 100%; border: 0; border-radius: 14px; padding: 15px 18px; margin-top: 22px; background: var(--lime); color: var(--ink); font-weight: 850; box-shadow: 0 8px 24px #b6cf2f45; transition: .2s; }
+    .submit:hover { transform: translateY(-1px); box-shadow: 0 12px 30px #b6cf2f66; }
+    .submit:disabled { cursor: not-allowed; filter: grayscale(.7); opacity: .55; transform: none; }
+    .progress { display: none; padding: 25px 28px 28px; border-top: 1px solid var(--line); }
+    .progress.show { display: block; }
+    .progress-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .progress strong { font-size: 16px; }
+    .timer { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .bar { height: 7px; background: #e1e8e3; border-radius: 9px; overflow: hidden; margin: 13px 0 9px; }
+    .bar span { display: block; height: 100%; width: 7%; border-radius: inherit; background: var(--green); transition: width .7s ease; }
+    .progress p { color: var(--muted); margin: 0; font-size: 13px; }
+    .error { display: none; margin-top: 16px; color: var(--red); background: #fff0ee; border-radius: 12px; padding: 12px 14px; }
+    .result { display: none; margin-top: 22px; }
+    .result.show { display: block; }
+    .result-head { padding: 26px 28px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid var(--line); }
+    .status-pill { padding: 7px 11px; border-radius: 99px; background: var(--green-soft); color: var(--green); font-size: 12px; font-weight: 800; white-space: nowrap; }
+    .hero-result { display: grid; grid-template-columns: .9fr 1.1fr; }
+    .preview { min-height: 330px; background: var(--ink); display: flex; flex-direction: column; justify-content: center; position: relative; }
+    .preview video { width: 100%; max-height: 430px; }
+    .preview-mode { display: none; gap: 5px; padding: 10px 12px; background: #061512; border-bottom: 1px solid #ffffff12; }
+    .preview-mode button { border: 0; border-radius: 8px; padding: 7px 10px; background: transparent; color: #bed0c9; font-size: 12px; font-weight: 780; }
+    .preview-mode button.active { background: var(--lime); color: var(--ink); }
+    .view-warning { display: none; margin-top: 15px; padding: 11px 13px; border-radius: 10px; background: #fff7d8; color: #715900; font-size: 13px; }
+    .scoreboard { padding: 30px; }
+    .recognition { color: var(--muted); font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+    .recognition-value { font-size: 29px; line-height: 1.1; font-weight: 900; letter-spacing: -.04em; margin: 7px 0 22px; }
+    .confidence { color: var(--green); font-size: 15px; }
+    .focus { background: var(--orange-soft); border-left: 5px solid var(--orange); border-radius: 4px 14px 14px 4px; padding: 18px; }
+    .focus-kicker { color: #a83e1b; font-size: 12px; font-weight: 850; text-transform: uppercase; letter-spacing: .1em; }
+    .focus h3 { font-size: 21px; margin: 5px 0 8px; }
+    .focus p { margin: 0; color: #684234; }
+    .action { margin-top: 12px !important; color: var(--ink) !important; font-weight: 750; }
+    .focus-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 16px; }
+    .moment-button, .drill-button, .more-button { border: 1px solid #d7a48e; border-radius: 9px; background: white; color: #8e3518; padding: 8px 11px; font-weight: 780; }
+    .drill { display: none; margin-top: 15px; padding-top: 13px; border-top: 1px solid #ebc9ba; }
+    .drill strong { display: block; margin-bottom: 6px; }
+    .drill ol { margin: 0; padding-left: 20px; color: #684234; }
+    .summary { color: var(--muted); margin: 20px 0 0; }
+    .lists { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border-top: 1px solid var(--line); }
+    .lists.single { grid-template-columns: 1fr; }
+    .lists.single .review { display: none; }
+    .list { padding: 26px 28px; background: var(--paper); }
+    .list h3 { margin: 0 0 15px; font-size: 17px; }
+    .list ul { list-style: none; margin: 0; padding: 0; }
+    .list li { position: relative; padding: 9px 0 9px 25px; border-bottom: 1px solid #e8ece8; }
+    .list li:last-child { border: 0; }
+    .good li::before { content: '✓'; position: absolute; left: 0; color: var(--green); font-weight: 900; }
+    .review li::before { content: '→'; position: absolute; left: 0; color: var(--orange); font-weight: 900; }
+    .review li.uncertain::before { content: '?'; width: 16px; height: 16px; top: 12px; display: grid; place-items: center; border-radius: 50%; background: #f3c94b; color: var(--ink); font-size: 11px; }
+    .uncertain-badge { display: inline-block; margin-left: 7px; padding: 2px 6px; border-radius: 99px; background: #fff3bd; color: #795f00; font-size: 10px; font-weight: 850; vertical-align: 2px; }
+    .more-button { display: none; margin-top: 12px; border-color: #bcd2c8; color: var(--green); }
+    .limits { padding: 22px 28px; border-top: 1px solid var(--line); color: var(--muted); }
+    .limits summary { cursor: pointer; font-weight: 780; color: var(--ink); }
+    .limit-summary { margin: 13px 0 4px; }
+    .limit-summary p { margin: 7px 0; padding-left: 20px; position: relative; }
+    .limit-summary p::before { content: '•'; position: absolute; left: 4px; color: var(--orange); }
+    .technical { margin-top: 15px; padding-top: 13px; border-top: 1px solid var(--line); }
+    .technical summary { font-size: 13px; color: var(--muted); }
+    .downloads { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 18px; }
+    .downloads a { text-decoration: none; color: var(--green); border: 1px solid #bcd2c8; padding: 8px 11px; border-radius: 9px; font-size: 13px; font-weight: 700; }
+    .again { border: 0; border-radius: 10px; padding: 10px 14px; color: white; background: var(--ink); font-weight: 750; }
+    .evidence-modal { display: none; position: fixed; inset: 0; z-index: 50; padding: 20px; background: #061512d9; backdrop-filter: blur(8px); align-items: center; justify-content: center; }
+    .evidence-modal.show { display: flex; }
+    .evidence-card { width: min(920px, 100%); max-height: calc(100vh - 40px); overflow: auto; border-radius: 22px; background: var(--paper); box-shadow: 0 30px 100px #0008; }
+    .evidence-head { display: flex; justify-content: space-between; gap: 20px; padding: 20px 22px; border-bottom: 1px solid var(--line); }
+    .evidence-head h2 { margin: 2px 0 4px; font-size: 22px; }
+    .evidence-head p { margin: 0; color: var(--muted); }
+    .modal-close { flex: 0 0 auto; width: 38px; height: 38px; border: 0; border-radius: 50%; background: #e9eeea; color: var(--ink); font-size: 22px; }
+    .evidence-player { position: relative; background: #061512; display: grid; place-items: center; min-height: 330px; }
+    .evidence-player video { width: 100%; max-height: 58vh; }
+    .evidence-overlay { position: absolute; left: 16px; bottom: 16px; color: white; background: #061512dd; padding: 8px 11px; border-radius: 9px; font-size: 13px; font-weight: 750; }
+    .evidence-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 9px; padding: 17px 20px 21px; }
+    .evidence-controls button, .evidence-controls select { border: 1px solid #bfd1c8; border-radius: 10px; background: white; color: var(--ink); padding: 9px 12px; font-weight: 750; }
+    .evidence-controls select { width: auto; }
+    @media (max-width: 800px) {
+      header { padding-top: 20px; } .server span:last-child { display: none; }
+      main { padding: 8px 14px 50px; } .intro { margin-bottom: 25px; }
+      .workspace, .hero-result { grid-template-columns: 1fr; } .media { min-height: 330px; }
+      .lists { grid-template-columns: 1fr; } .result-head { align-items: flex-start; }
+      .evidence-modal { padding: 8px; } .evidence-card { max-height: calc(100vh - 16px); } .evidence-player { min-height: 230px; }
+    }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <div class="brand"><span class="mark">◒</span> Badminton Form Lab</div>
+    <div class="server"><span id="serverDot" class="dot"></span><span id="serverText">Đang kết nối AI</span></div>
+  </header>
+  <main>
+    <section class="intro">
+      <div class="eyebrow">Phân tích kỹ thuật bằng AI</div>
+      <h1>Đưa cú đánh<br>lên một tầm mới.</h1>
+      <p>Tải một video ngắn, chọn kỹ thuật và nhận hướng dẫn rõ ràng để áp dụng ngay trên sân.</p>
+    </section>
+
+    <section class="workspace" id="workspace">
+      <div class="card media" id="mediaBox">
+        <video id="localVideo" controls playsinline></video>
+        <div class="drop" id="dropZone">
+          <div>
+            <div class="drop-icon">＋</div>
+            <strong>Thả video cú đánh vào đây</strong>
+            <small>MP4, MOV, AVI hoặc MKV · tối đa <span id="maxSize">500 MB</span></small><br>
+            <button class="pick" type="button" id="pickButton">Chọn video</button>
+            <input id="videoInput" type="file" accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,.mp4,.mov,.avi,.mkv" hidden>
+          </div>
+        </div>
+        <div class="file-meta" id="fileMeta"><div><strong id="fileName"></strong><br><small id="fileSize"></small></div><button class="clear" id="clearFile" type="button">Đổi video</button></div>
+      </div>
+
+      <div class="card">
+        <form class="form" id="analysisForm">
+          <h2>Thông tin cú đánh</h2>
+          <p class="sub">Chọn đúng để AI so sánh với kỹ thuật phù hợp.</p>
+          <div class="auto-detect" id="autoDetect"><strong>AI tự nhận diện kỹ thuật</strong><span id="classifierHint">Video sẽ được phân loại trước khi đánh giá.</span></div>
+          <div class="fallback" id="techniqueFallback"><label for="technique">Kỹ thuật</label><select id="technique" name="technique"><option value="forehand_clear">Phông cầu thuận tay</option><option value="backhand_drive">Đánh cầu ngang trái tay</option></select></div>
+          <label for="view">Góc quay</label>
+          <select id="view" name="view"><option value="front">Chính diện</option><option value="side">Góc bên</option></select>
+          <p class="hint">Chọn chính diện khi nhìn rõ ngực và hai vai; chọn góc bên khi camera đặt ngang với người chơi.</p>
+          <label for="handedness">Tay cầm vợt</label>
+          <select id="handedness" name="handedness"><option value="right">Tay phải</option><option value="left">Tay trái</option></select>
+          <button class="submit" id="submitButton" type="submit" disabled>Chọn video để bắt đầu</button>
+          <div class="error" id="errorBox" role="alert"></div>
+        </form>
+        <div class="progress" id="progress">
+          <div class="progress-top"><strong id="progressTitle">Đang tải video…</strong><span class="timer" id="timer">00:00</span></div>
+          <div class="bar"><span id="progressBar"></span></div>
+          <p id="progressText">Giữ trang này mở trong khi AI xử lý.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card result" id="result">
+      <div class="result-head"><div><div class="eyebrow">Báo cáo của bạn</div><h2 id="resultTitle">Kết quả phân tích</h2></div><button class="again" id="again" type="button">Phân tích video khác</button></div>
+      <div class="hero-result">
+        <div class="preview">
+          <div class="preview-mode" id="previewMode" aria-label="Kiểu video">
+            <button id="showSkeleton" type="button">Chỉ skeleton</button>
+            <button id="showOverlay" type="button">Skeleton + video</button>
+          </div>
+          <video id="posePreview" controls playsinline></video>
+        </div>
+        <div class="scoreboard">
+          <div class="recognition">AI nhận diện</div>
+          <div class="recognition-value"><span id="prediction">—</span> <span class="confidence" id="confidence"></span></div>
+          <div class="focus" id="focusBox"><div class="focus-kicker">Việc nên sửa trước</div><h3 id="focusLabel"></h3><p id="focusObservation"></p><p class="action" id="focusAction"></p><div class="focus-actions"><button class="moment-button" id="focusMoment" type="button">Xem khoảnh khắc</button><button class="drill-button" id="drillButton" type="button">Xem cách tập</button></div><div class="drill" id="drill"><strong>Bài tập nhanh</strong><ol id="drillSteps"></ol></div></div>
+          <p class="summary" id="summary"></p>
+          <div class="view-warning" id="viewWarning"></div>
+        </div>
+      </div>
+      <div class="lists" id="resultLists">
+        <div class="list good"><h3>✓ Dấu hiệu quan sát được</h3><ul id="goodList"></ul><button class="more-button" id="moreGood" type="button">Xem thêm</button></div>
+        <div class="list review"><h3>→ AI chưa thể kết luận</h3><ul id="reviewList"></ul></div>
+      </div>
+      <details class="limits"><summary>Vì sao AI không đánh giá một số mục?</summary><div class="limit-summary" id="limitContent"></div><details class="technical"><summary>Dữ liệu dành cho kỹ thuật viên</summary><div class="downloads" id="downloads"></div></details></details>
+    </section>
+  </main>
+</div>
+<div class="evidence-modal" id="evidenceModal" role="dialog" aria-modal="true" aria-labelledby="evidenceTitle">
+  <div class="evidence-card">
+    <div class="evidence-head"><div><div class="eyebrow">Xem bằng chứng</div><h2 id="evidenceTitle">Khoảnh khắc cần xem</h2><p id="evidenceCue"></p></div><button class="modal-close" id="modalClose" type="button" aria-label="Đóng">×</button></div>
+    <div class="evidence-player"><video id="evidenceVideo" playsinline></video><div class="evidence-overlay" id="evidenceStatus">Đang chuẩn bị…</div></div>
+    <div class="evidence-controls"><button id="previousFrame" type="button">← 1 frame</button><button id="replayEvidence" type="button">Phát lại 2 lần</button><button id="nextFrame" type="button">1 frame →</button><label for="evidenceSpeed">Tốc độ</label><select id="evidenceSpeed"><option value="0.25">0,25×</option><option value="0.35" selected>0,35×</option><option value="0.5">0,5×</option><option value="1">1×</option></select></div>
+  </div>
+</div>
+<script>
+  const $ = id => document.getElementById(id);
+  const state = { file: null, objectUrl: null, startedAt: 0, timerId: null, maxBytes: 500 * 1024 * 1024, classifierEnabled: false, autoTechnique: false, previewUrl: null, previewUrls: {}, reportFps: 30, evidence: null, evidenceHandler: null };
+  const labels = { forehand_clear: 'Phông cầu thuận tay', backhand_drive: 'Đánh cầu ngang trái tay' };
+
+  async function init() {
+    try {
+      const response = await fetch('/health');
+      if (!response.ok) throw new Error();
+      const health = await response.json();
+      state.maxBytes = health.max_upload_bytes;
+      $('maxSize').textContent = formatBytes(state.maxBytes);
+      $('serverDot').classList.add('on'); $('serverText').textContent = 'AI sẵn sàng';
+      state.classifierEnabled = health.classifier_enabled;
+      state.autoTechnique = health.classifier_enabled;
+      $('classifierHint').textContent = health.classifier_enabled
+        ? 'ST-GCN++ sẽ chọn kỹ thuật trước khi hệ thống đánh giá.'
+        : 'Classifier chưa bật trên máy chủ; vui lòng chọn kỹ thuật thủ công.';
+      $('techniqueFallback').style.display = health.classifier_enabled ? 'none' : 'block';
+    } catch (_) {
+      $('serverText').textContent = 'Không kết nối được AI';
+      showError('Không kết nối được tới AI service. Hãy kiểm tra FastAPI đang chạy.');
+    }
+  }
+
+  function chooseFile(file) {
+    clearError();
+    if (!file) return;
+    const ext = '.' + (file.name.split('.').pop() || '').toLowerCase();
+    if (!['.mp4', '.mov', '.avi', '.mkv'].includes(ext)) return showError('Định dạng video không được hỗ trợ.');
+    if (file.size > state.maxBytes) return showError(`Video vượt giới hạn ${formatBytes(state.maxBytes)}.`);
+    state.file = file;
+    if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
+    state.objectUrl = URL.createObjectURL(file);
+    $('localVideo').src = state.objectUrl; $('localVideo').style.display = 'block';
+    $('dropZone').style.display = 'none'; $('fileMeta').style.display = 'flex';
+    $('fileName').textContent = file.name; $('fileSize').textContent = formatBytes(file.size);
+    $('submitButton').disabled = false; $('submitButton').textContent = 'Phân tích cú đánh';
+  }
+
+  function resetUpload() {
+    state.file = null; $('videoInput').value = ''; $('localVideo').removeAttribute('src'); $('localVideo').load();
+    $('localVideo').style.display = 'none'; $('dropZone').style.display = 'grid'; $('fileMeta').style.display = 'none';
+    $('submitButton').disabled = true; $('submitButton').textContent = 'Chọn video để bắt đầu';
+  }
+
+  async function submitAnalysis(event) {
+    event.preventDefault(); if (!state.file) return;
+    clearError(); setBusy(true); updateProgress('Đang tải video…', 'Video đang được gửi an toàn tới AI.', 12);
+    const data = new FormData();
+    data.append('video', state.file); data.append('technique', state.autoTechnique ? 'auto' : $('technique').value); data.append('view', $('view').value);
+    data.append('handedness', $('handedness').value); data.append('target', 'single'); data.append('segmentation_mode', 'single');
+    data.append('generate_preview', 'true'); data.append('run_classifier', String(state.classifierEnabled));
+    try {
+      const response = await fetch('/v1/analyses', { method: 'POST', body: data });
+      if (!response.ok) throw new Error(await apiError(response));
+      const accepted = await response.json(); updateProgress('AI đang nhận diện kỹ thuật…', 'Xác định loại cú đánh trước khi đánh giá.', 34);
+      await pollJob(accepted.status_url);
+    } catch (error) { fail(error.message || 'Không thể phân tích video.'); }
+  }
+
+  async function pollJob(url) {
+    let ticks = 0;
+    while (true) {
+      await sleep(1400); ticks++;
+      const response = await fetch(url); if (!response.ok) throw new Error(await apiError(response));
+      const job = await response.json();
+      if (job.status === 'failed') {
+        if ((job.error || '').includes('could not identify the technique confidently')) {
+          state.autoTechnique = false;
+          $('techniqueFallback').style.display = 'block';
+          $('classifierHint').textContent = 'AI chưa đủ tự tin. Chọn kỹ thuật bên dưới rồi thử lại.';
+          throw new Error('AI chưa nhận diện đủ chắc chắn. Hãy chọn kỹ thuật và phân tích lại.');
+        }
+        throw new Error(job.error || 'AI không thể xử lý video này.');
+      }
+      if (job.status === 'succeeded') { updateProgress('Đã phân tích xong', 'Đang chuẩn bị báo cáo cho bạn.', 100); await showResult(job); return; }
+      if (ticks > 9) updateProgress('Đang đánh giá kỹ thuật…', 'So sánh chuyển động với mẫu kỹ thuật.', Math.min(88, 55 + ticks));
+    }
+  }
+
+  async function showResult(job) {
+    const reportUrl = job.artifact_urls['user_report.json'];
+    if (!reportUrl) throw new Error('Không tìm thấy báo cáo người dùng.');
+    const response = await fetch(reportUrl); if (!response.ok) throw new Error('Không đọc được báo cáo.');
+    const report = await response.json();
+    $('resultTitle').textContent = report.title;
+    $('prediction').textContent = report.recognition.prediction || labels[report.technique.selected] || 'Chưa xác định';
+    $('confidence').textContent = report.recognition.confidence_percent == null ? '' : `${report.recognition.confidence_percent.toFixed(1)}% tin cậy`;
+    $('summary').textContent = report.summary;
+    state.reportFps = Number(report.video_quality.fps) || 30;
+    $('viewWarning').textContent = report.video_quality.view_warning || '';
+    $('viewWarning').style.display = report.video_quality.view_warning ? 'block' : 'none';
+    if (report.primary_focus) {
+      $('focusBox').style.display = 'block'; $('focusLabel').textContent = report.primary_focus.label;
+      $('focusObservation').textContent = report.primary_focus.observation || '';
+      $('focusAction').textContent = report.primary_focus.action || '';
+      const moment = report.primary_focus.moment;
+      $('focusMoment').style.display = moment ? 'inline-block' : 'none';
+      $('focusMoment').textContent = moment ? moment.label : 'Xem khoảnh khắc';
+      $('focusMoment').onclick = () => moment && openEvidence(
+        moment, report.primary_focus.label,
+        report.primary_focus.action || report.primary_focus.observation
+      );
+      const drill = report.primary_focus.drill || [];
+      $('drillButton').style.display = drill.length ? 'inline-block' : 'none';
+      $('drill').style.display = 'none'; $('drillSteps').replaceChildren();
+      for (const step of drill) { const li = document.createElement('li'); li.textContent = step; $('drillSteps').append(li); }
+      $('drillButton').onclick = () => { const opening = $('drill').style.display === 'none'; $('drill').style.display = opening ? 'block' : 'none'; $('drillButton').textContent = opening ? 'Ẩn cách tập' : 'Xem cách tập'; };
+    } else { $('focusBox').style.display = 'none'; }
+    const goodItems = report.observed_signals || [];
+    fillList('goodList', goodItems.slice(0, 3), item => item.message, false);
+    $('moreGood').style.display = goodItems.length > 3 ? 'inline-block' : 'none';
+    $('moreGood').textContent = `Xem thêm ${Math.max(0, goodItems.length - 3)} dấu hiệu`;
+    $('moreGood').dataset.expanded = 'false';
+    $('moreGood').onclick = () => { const expanded = $('moreGood').dataset.expanded === 'true'; fillList('goodList', expanded ? goodItems.slice(0, 3) : goodItems, item => item.message, false); $('moreGood').dataset.expanded = String(!expanded); $('moreGood').textContent = expanded ? `Xem thêm ${goodItems.length - 3} dấu hiệu` : 'Thu gọn'; };
+    const attention = (report.needs_review || []).filter(item => !report.primary_focus || item.label !== report.primary_focus.label);
+    const seen = new Set(attention.map(item => item.label));
+    for (const item of report.reference_measurements || []) {
+      if (seen.has(item.label) || attention.length >= 3) continue;
+      seen.add(item.label);
+      attention.push({
+        label: `${item.label}${item.phase ? ` (${item.phase})` : ''}`,
+        message: item.suggestion || item.note,
+        uncertain: true,
+        moment: item.moment
+      });
+    }
+    fillList('reviewList', attention, item => item.suggestion || item.message, true);
+    $('resultLists').classList.toggle('single', !attention.length);
+    renderLimitSummary(report);
+    const preview = job.artifact_urls['pose_preview.mp4'];
+    const skeletonPreview = job.artifact_urls['skeleton_preview.mp4'];
+    state.previewUrl = preview || skeletonPreview || null;
+    state.previewUrls = { overlay: preview || null, skeleton: skeletonPreview || null };
+    if (preview || skeletonPreview) {
+      $('posePreview').parentElement.style.display = 'grid';
+      $('previewMode').style.display = preview && skeletonPreview ? 'flex' : 'none';
+      selectPreview(skeletonPreview ? 'skeleton' : 'overlay');
+    }
+    else $('posePreview').parentElement.style.display = 'none';
+    $('downloads').replaceChildren();
+    const names = { 'user_report.json': 'Báo cáo JSON', 'analysis.json': 'Dữ liệu đầy đủ', 'technique_report.json': 'Báo cáo kỹ thuật', 'pose_preview.mp4': 'Video pose', 'skeleton_preview.mp4': 'Video chỉ skeleton' };
+    for (const [name, label] of Object.entries(names)) if (job.artifact_urls[name]) {
+      const a = document.createElement('a'); a.href = job.artifact_urls[name]; a.textContent = label; a.target = '_blank'; $('downloads').append(a);
+    }
+    await sleep(350); setBusy(false); $('workspace').style.display = 'none'; $('result').classList.add('show'); $('result').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function selectPreview(kind) {
+    const url = state.previewUrls[kind];
+    if (!url) return;
+    const video = $('posePreview');
+    const currentTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+    const wasPlaying = !video.paused;
+    video.src = url;
+    video.addEventListener('loadedmetadata', () => {
+      video.currentTime = Math.min(currentTime, video.duration || currentTime);
+      if (wasPlaying) video.play().catch(() => {});
+    }, { once: true });
+    $('showSkeleton').classList.toggle('active', kind === 'skeleton');
+    $('showOverlay').classList.toggle('active', kind === 'overlay');
+  }
+
+  function fillList(id, items, detail, showMoment = false) {
+    const list = $(id); list.replaceChildren();
+    if (!items || !items.length) { const li = document.createElement('li'); li.textContent = 'Chưa có điểm nổi bật.'; list.append(li); return; }
+    for (const item of items) { const li = document.createElement('li'); if (item.uncertain) li.classList.add('uncertain'); const strong = document.createElement('strong'); strong.textContent = item.label; li.append(strong); if (item.uncertain) { const badge = document.createElement('span'); badge.className = 'uncertain-badge'; badge.textContent = 'AI chưa thể kết luận'; li.append(badge); } const cue = detail(item) || ''; li.append(document.createElement('br'), document.createTextNode(cue)); if (showMoment && item.moment) { const button = document.createElement('button'); button.className = 'more-button'; button.style.display = 'inline-block'; button.textContent = item.moment.label; button.onclick = () => openEvidence(item.moment, item.label, cue); li.append(document.createElement('br'), button); } list.append(li); }
+  }
+
+  function openEvidence(moment, title, cue) {
+    if (!state.previewUrl || !moment) return;
+    state.evidence = { target: Math.max(0, Number(moment.seconds) || 0), title, cue, loops: 0 };
+    $('evidenceTitle').textContent = title || 'Khoảnh khắc cần xem';
+    $('evidenceCue').textContent = cue || '';
+    $('evidenceModal').classList.add('show'); document.body.style.overflow = 'hidden';
+    const video = $('evidenceVideo');
+    if (video.src !== new URL(state.previewUrl, location.href).href) video.src = state.previewUrl;
+    const start = () => playEvidence();
+    if (video.readyState >= 1) start(); else video.addEventListener('loadedmetadata', start, { once: true });
+  }
+
+  function playEvidence() {
+    const video = $('evidenceVideo'); const evidence = state.evidence; if (!evidence) return;
+    stopEvidenceHandler(); evidence.loops = 0;
+    const start = Math.max(0, evidence.target - 0.75);
+    const end = Math.min(video.duration || evidence.target + 0.75, evidence.target + 0.75);
+    const speed = Number($('evidenceSpeed').value) || 0.35;
+    video.pause(); video.currentTime = start; video.playbackRate = speed;
+    $('evidenceStatus').textContent = `Lần 1/2 · tốc độ ${String(speed).replace('.', ',')}×`;
+    state.evidenceHandler = () => {
+      if (video.currentTime < end) return;
+      evidence.loops += 1;
+      if (evidence.loops < 2) {
+        video.currentTime = start;
+        $('evidenceStatus').textContent = `Lần 2/2 · tốc độ ${String(speed).replace('.', ',')}×`;
+        video.play().catch(() => {});
+        return;
+      }
+      stopEvidenceHandler(); video.pause(); video.currentTime = evidence.target; video.playbackRate = 1;
+      $('evidenceStatus').textContent = `Đã dừng tại ${evidence.target.toFixed(2)}s`;
+    };
+    video.addEventListener('timeupdate', state.evidenceHandler); video.play().catch(() => {});
+  }
+
+  function stopEvidenceHandler() {
+    if (!state.evidenceHandler) return;
+    $('evidenceVideo').removeEventListener('timeupdate', state.evidenceHandler);
+    state.evidenceHandler = null;
+  }
+
+  function stepEvidence(direction) {
+    const video = $('evidenceVideo'); stopEvidenceHandler(); video.pause(); video.playbackRate = 1;
+    video.currentTime = Math.max(0, Math.min(video.duration || Infinity, video.currentTime + direction / state.reportFps));
+    $('evidenceStatus').textContent = `Frame gần ${video.currentTime.toFixed(2)}s`;
+  }
+
+  function closeEvidence() {
+    const video = $('evidenceVideo'); stopEvidenceHandler(); video.pause(); video.playbackRate = 1;
+    $('evidenceModal').classList.remove('show'); document.body.style.overflow = ''; state.evidence = null;
+  }
+
+  function renderLimitSummary(report) {
+    const box = $('limitContent'); box.replaceChildren();
+    const reasons = (report.not_assessed || []).map(item => item.reason || '');
+    const messages = [];
+    if (!report.video_quality.passed) messages.push('Video chưa đủ rõ để thực hiện các phép đo ổn định.');
+    if (reasons.some(reason => reason.includes('camera') || reason.includes('mặt phẳng'))) messages.push('Cơ thể xoay hoặc góc quay làm một số phép đo 2D không còn chính xác.');
+    if (reasons.some(reason => reason.includes('kiểm định'))) messages.push('Một số chỉ số chưa đủ kiểm định để dùng làm lời khuyên cho người chơi.');
+    if (reasons.some(reason => reason.includes('tiếp xúc cầu'))) messages.push('AI chưa theo dõi quả cầu và mặt vợt nên không khẳng định chính xác thời điểm tiếp xúc.');
+    if (!messages.length) messages.push('Không có giới hạn đáng kể trong lần phân tích này.');
+    for (const message of messages.slice(0, 3)) { const p = document.createElement('p'); p.textContent = message; box.append(p); }
+  }
+
+  function setBusy(busy) {
+    $('submitButton').disabled = busy || !state.file; $('progress').classList.toggle('show', busy);
+    if (busy) { state.startedAt = Date.now(); state.timerId = setInterval(updateTimer, 1000); }
+    else { clearInterval(state.timerId); }
+  }
+  function updateProgress(title, text, percent) { $('progressTitle').textContent = title; $('progressText').textContent = text; $('progressBar').style.width = `${percent}%`; }
+  function updateTimer() { const total = Math.floor((Date.now() - state.startedAt) / 1000); $('timer').textContent = `${String(Math.floor(total/60)).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`; }
+  function fail(message) { setBusy(false); showError(message); updateProgress('Đã dừng', '', 0); }
+  function showError(message) { $('errorBox').textContent = message; $('errorBox').style.display = 'block'; }
+  function clearError() { $('errorBox').style.display = 'none'; $('errorBox').textContent = ''; }
+  function formatBytes(bytes) { if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(bytes >= 100 * 1024 ** 2 ? 0 : 1)} MB`; return `${Math.ceil(bytes / 1024)} KB`; }
+  function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+  async function apiError(response) { try { const body = await response.json(); return body.detail || `Lỗi ${response.status}`; } catch (_) { return `Lỗi ${response.status}`; } }
+
+  $('pickButton').addEventListener('click', () => $('videoInput').click()); $('videoInput').addEventListener('change', e => chooseFile(e.target.files[0]));
+  $('clearFile').addEventListener('click', resetUpload); $('analysisForm').addEventListener('submit', submitAnalysis);
+  $('again').addEventListener('click', () => { $('result').classList.remove('show'); $('workspace').style.display = 'grid'; resetUpload(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+  $('modalClose').addEventListener('click', closeEvidence);
+  $('replayEvidence').addEventListener('click', playEvidence);
+  $('previousFrame').addEventListener('click', () => stepEvidence(-1));
+  $('nextFrame').addEventListener('click', () => stepEvidence(1));
+  $('evidenceSpeed').addEventListener('change', () => { if (state.evidence) playEvidence(); });
+  $('showSkeleton').addEventListener('click', () => selectPreview('skeleton'));
+  $('showOverlay').addEventListener('click', () => selectPreview('overlay'));
+  $('evidenceModal').addEventListener('click', event => { if (event.target === $('evidenceModal')) closeEvidence(); });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape' && $('evidenceModal').classList.contains('show')) closeEvidence(); });
+  for (const event of ['dragenter','dragover']) $('dropZone').addEventListener(event, e => { e.preventDefault(); $('dropZone').classList.add('drag'); });
+  for (const event of ['dragleave','drop']) $('dropZone').addEventListener(event, e => { e.preventDefault(); $('dropZone').classList.remove('drag'); });
+  $('dropZone').addEventListener('drop', e => chooseFile(e.dataTransfer.files[0]));
+  init();
+</script>
+</body>
+</html>
