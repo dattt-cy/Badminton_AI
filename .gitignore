@@ -17,6 +17,7 @@ data/raw/**
 !data/raw/**/
 !data/raw/**/.gitkeep
 !data/raw/README.md
+data/cache/
 data/interim/*
 data/processed/*
 data/manual_clips/
@@ -51,6 +52,10 @@ docs/*.pdf
 wandb/
 runs/
 mlruns/
+
+# Local vendor checkouts (use adapters from this repository)
+external/BST-Badminton-Stroke-type-Transformer/
+external/TrackNetV3/
 
 # Python package build metadata
 *.egg-info/
