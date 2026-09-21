@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="780" viewBox="0 0 1600 780">
+  <rect width="1600" height="780" rx="34" fill="#F8FAFC"/>
+  <style>.num{font:700 25px Arial;fill:white}.h{font:700 29px Arial;fill:#0F172A}.p{font:400 20px Arial;fill:#475569}.strong{font:700 20px Arial;fill:#0F172A}</style>
+  <rect x="70" y="70" width="700" height="280" rx="28" fill="#DBEAFE" stroke="#2563EB" stroke-width="3"/>
+  <circle cx="125" cy="125" r="30" fill="#2563EB"/><text x="125" y="134" text-anchor="middle" class="num">1</text>
+  <text x="175" y="135" class="h">Phân loại loại cú</text><text x="105" y="200" class="p">Độ chính xác · Độ chính xác cân bằng</text><text x="105" y="242" class="p">F1 trung bình · F1 từng lớp</text><text x="105" y="298" class="strong">Chỉ số chọn checkpoint: F1 trung bình</text>
+  <rect x="830" y="70" width="700" height="280" rx="28" fill="#CFFAFE" stroke="#0891B2" stroke-width="3"/>
+  <circle cx="885" cy="125" r="30" fill="#0891B2"/><text x="885" y="134" text-anchor="middle" class="num">2</text>
+  <text x="935" y="135" class="h">Forehand / backhand</text><text x="865" y="200" class="p">Độ chính xác · F1 trung bình</text><text x="865" y="242" class="p">Loại cú và hướng đánh cùng đúng</text><text x="865" y="298" class="strong">Chỉ số chính: độ chính xác đồng thời</text>
+  <rect x="70" y="420" width="700" height="280" rx="28" fill="#EDE9FE" stroke="#7C3AED" stroke-width="3"/>
+  <circle cx="125" cy="475" r="30" fill="#7C3AED"/><text x="125" y="484" text-anchor="middle" class="num">3</text>
+  <text x="175" y="485" class="h">Định vị cú đánh</text><text x="105" y="550" class="p">Precision · Recall · F1 tại ±2 / ±5 / ±15 frame</text><text x="105" y="592" class="p">Sai số frame trung bình · đúng người trên/dưới</text><text x="105" y="648" class="strong">Đo cả bỏ sót và phát hiện nhầm</text>
+  <rect x="830" y="420" width="700" height="280" rx="28" fill="#FEF3C7" stroke="#F59E0B" stroke-width="3"/>
+  <circle cx="885" cy="475" r="30" fill="#F59E0B"/><text x="885" y="484" text-anchor="middle" class="num">4</text>
+  <text x="935" y="485" class="h">Toàn hệ thống</text><text x="865" y="550" class="p">Thời điểm + người + loại cú + hướng đánh</text><text x="865" y="592" class="p">Tỷ lệ đúng · độ bao phủ · thời gian xử lý</text><text x="865" y="648" class="strong">Một lỗi ở bất kỳ tầng nào đều làm event sai</text>
+</svg>

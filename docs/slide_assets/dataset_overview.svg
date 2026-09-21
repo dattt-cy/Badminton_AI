@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="820" viewBox="0 0 1600 820">
+  <rect width="1600" height="820" rx="34" fill="#F8FAFC"/>
+  <style>.h{font:700 34px Arial;fill:#0F172A}.n{font:700 54px Arial}.p{font:400 22px Arial;fill:#475569}.tag{font:700 18px Arial;fill:white}.foot{font:400 19px Arial;fill:#64748B}</style>
+  <rect x="180" y="70" width="560" height="620" rx="30" fill="#CFFAFE" stroke="#0891B2" stroke-width="3"/>
+  <rect x="215" y="105" width="190" height="40" rx="20" fill="#0891B2"/><text x="310" y="132" text-anchor="middle" class="tag">RGB LOẠI CÚ</text>
+  <text x="215" y="215" class="h">Fine-Badminton</text><text x="215" y="290" class="n" fill="#0891B2">9.817</text><text x="215" y="328" class="p">đoạn cú đánh có nhãn</text>
+  <text x="215" y="405" class="p">• 10 trận chuyên nghiệp</text><text x="215" y="450" class="p">• 980.703 khung hình</text><text x="215" y="495" class="p">• 29 nhãn gốc → 8 lớp</text>
+  <text x="215" y="575" class="h">Vai trò</text><text x="215" y="620" class="p">Học hình dáng + chuyển động</text><text x="215" y="655" class="p">của loại cú đánh</text>
+  <rect x="860" y="70" width="560" height="620" rx="30" fill="#DBEAFE" stroke="#2563EB" stroke-width="3"/>
+  <rect x="895" y="105" width="210" height="40" rx="20" fill="#2563EB"/><text x="1000" y="132" text-anchor="middle" class="tag">NHÃN TỪNG CÚ</text>
+  <text x="895" y="215" class="h">ShuttleSet</text><text x="895" y="290" class="n" fill="#2563EB">36.492</text><text x="895" y="328" class="p">cú đánh trong dataset gốc</text>
+  <text x="895" y="405" class="p">• 44 trận · 3.685 rally</text><text x="895" y="450" class="p">• hit frame + player side</text><text x="895" y="495" class="p">• court + stroke side</text>
+  <text x="895" y="575" class="h">Vai trò</text><text x="895" y="620" class="p">Tìm cú + forehand/backhand</text><text x="895" y="655" class="p">+ kết hợp dữ liệu</text>
+  <text x="800" y="760" text-anchor="middle" class="foot">Chia theo trận để tránh rò rỉ · Kinetics-400 chỉ cung cấp trọng số khởi tạo</text>
+</svg>

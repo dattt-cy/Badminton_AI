@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="760" viewBox="0 0 1600 760">
+  <rect width="1600" height="760" rx="34" fill="#F8FAFC"/>
+  <style>.year{font:700 18px Arial;fill:white}.h{font:700 30px Arial;fill:#0F172A}.p{font:400 20px Arial;fill:#475569}.m{font:700 21px Arial}.arrow{stroke:#94A3B8;stroke-width:5;fill:none;marker-end:url(#a)}</style>
+  <defs><marker id="a" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0 0L12 6L0 12z" fill="#94A3B8"/></marker></defs>
+  <rect x="70" y="100" width="410" height="500" rx="28" fill="#EDE9FE" stroke="#7C3AED" stroke-width="3"/>
+  <rect x="105" y="130" width="100" height="40" rx="20" fill="#7C3AED"/><text x="155" y="157" text-anchor="middle" class="year">2023</text>
+  <text x="105" y="230" class="h">TemPose</text><text x="105" y="280" class="m" fill="#7C3AED">Mô hình chuỗi khung xương</text>
+  <text x="105" y="345" class="p">Khung xương hai người</text><text x="105" y="385" class="p">+ vị trí cầu</text>
+  <text x="105" y="465" class="p">Nhận diện động tác tinh tế</text><text x="105" y="505" class="p">trên đoạn video đã cắt</text>
+  <rect x="595" y="100" width="410" height="500" rx="28" fill="#DBEAFE" stroke="#2563EB" stroke-width="4"/>
+  <rect x="630" y="130" width="100" height="40" rx="20" fill="#2563EB"/><text x="680" y="157" text-anchor="middle" class="year">2026</text>
+  <text x="630" y="230" class="h">BST</text><text x="630" y="280" class="m" fill="#2563EB">Mô hình chuỗi loại cú đánh</text>
+  <text x="630" y="345" class="p">Khung xương + vị trí sân</text><text x="630" y="385" class="p">+ quỹ đạo cầu</text>
+  <text x="630" y="465" class="p">Độ chính xác 70,20%</text><text x="630" y="505" class="p">F1 trung bình 63,34%*</text>
+  <rect x="1120" y="100" width="410" height="500" rx="28" fill="#CFFAFE" stroke="#0891B2" stroke-width="3"/>
+  <rect x="1155" y="130" width="135" height="40" rx="20" fill="#0891B2"/><text x="1223" y="157" text-anchor="middle" class="year">NHÓM</text>
+  <text x="1155" y="230" class="h">Toàn hệ thống</text><text x="1155" y="280" class="m" fill="#0891B2">Định vị + phân loại</text>
+  <text x="1155" y="345" class="p">Luồng RGB nhanh</text><text x="1155" y="385" class="p">+ kết hợp tùy chọn</text>
+  <text x="1155" y="465" class="p">thời điểm + người + loại cú</text><text x="1155" y="505" class="p">+ forehand/backhand</text>
+  <path d="M480 350 H595" class="arrow"/><path d="M1005 350 H1120" class="arrow"/>
+  <text x="800" y="680" text-anchor="middle" class="p">*BST: 25% ShuttleSet · đoạn cố định · 25 lớp; không so sánh trực tiếp với cách đánh giá 8 lớp của nhóm</text>
+</svg>

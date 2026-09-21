@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="720" viewBox="0 0 1600 720">
+  <rect width="1600" height="720" rx="34" fill="#F8FAFC"/>
+  <style>
+    .title{font:700 34px Arial;fill:#0F172A}.label{font:700 23px Arial;fill:#0F172A}
+    .sub{font:400 18px Arial;fill:#475569}.fast{fill:#DBEAFE;stroke:#2563EB;stroke-width:3}
+    .optional{fill:#CFFAFE;stroke:#0891B2;stroke-width:3}.out{fill:#FEF3C7;stroke:#F59E0B;stroke-width:3}
+    .arrow{stroke:#64748B;stroke-width:5;fill:none;marker-end:url(#head)}
+  </style>
+  <defs><marker id="head" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#64748B"/></marker></defs>
+  <text x="70" y="70" class="title">LUỒNG XỬ LÝ NHANH — mặc định khi tải video</text>
+  <rect x="70" y="120" width="250" height="135" rx="22" class="fast"/>
+  <text x="195" y="170" text-anchor="middle" class="label">Video trận đấu</text><text x="195" y="210" text-anchor="middle" class="sub">broadcast singles</text>
+  <rect x="405" y="120" width="290" height="135" rx="22" class="fast"/>
+  <text x="550" y="160" text-anchor="middle" class="label">R(2+1)D-18 Hit Detector</text><text x="550" y="196" text-anchor="middle" class="sub">không đánh / trên / dưới</text><text x="550" y="225" text-anchor="middle" class="sub">loại trùng theo thời gian</text>
+  <rect x="780" y="120" width="290" height="135" rx="22" class="fast"/>
+  <text x="925" y="160" text-anchor="middle" class="label">Cắt vùng người đánh</text><text x="925" y="196" text-anchor="middle" class="sub">YOLOv8-Pose</text><text x="925" y="225" text-anchor="middle" class="sub">cửa sổ ±1 giây</text>
+  <rect x="1155" y="120" width="360" height="135" rx="22" class="out"/>
+  <text x="1335" y="160" text-anchor="middle" class="label">R(2+1)D-18 · Epoch 20</text><text x="1335" y="196" text-anchor="middle" class="sub">8 loại cú đánh</text><text x="1335" y="225" text-anchor="middle" class="sub">forehand / backhand</text>
+  <path d="M320 188 H405" class="arrow"/><path d="M695 188 H780" class="arrow"/><path d="M1070 188 H1155" class="arrow"/>
+  <text x="70" y="380" class="title">NHÁNH PHÂN TÍCH TÙY CHỌN — chỉ chạy quanh cú nghi ngờ</text>
+  <rect x="210" y="430" width="310" height="135" rx="22" class="optional"/>
+  <text x="365" y="470" text-anchor="middle" class="label">TrackNetV3</text><text x="365" y="506" text-anchor="middle" class="sub">quỹ đạo cầu</text><text x="365" y="535" text-anchor="middle" class="sub">chỉ quanh cú nghi ngờ</text>
+  <rect x="645" y="430" width="310" height="135" rx="22" class="optional"/>
+  <text x="800" y="470" text-anchor="middle" class="label">Khung xương + sân</text><text x="800" y="506" text-anchor="middle" class="sub">hình học hai người</text><text x="800" y="535" text-anchor="middle" class="sub">vị trí đã chuẩn hóa</text>
+  <rect x="1080" y="430" width="310" height="135" rx="22" class="optional"/>
+  <text x="1235" y="470" text-anchor="middle" class="label">Kết hợp dữ liệu</text><text x="1235" y="506" text-anchor="middle" class="sub">RGB + khung xương + sân</text><text x="1235" y="535" text-anchor="middle" class="sub">+ quỹ đạo cầu</text>
+  <path d="M520 498 H645" class="arrow"/><path d="M955 498 H1080" class="arrow"/>
+  <path d="M1335 255 C1335 330 1235 350 1235 430" class="arrow"/>
+  <text x="800" y="660" text-anchor="middle" class="sub">Kết quả: thời điểm chạm cầu · người đánh · loại cú · forehand/backhand · độ tin cậy</text>
+</svg>
