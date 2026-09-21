@@ -26,7 +26,7 @@ from scripts.inference.classify_shuttleset_rgb_multitask import (
 )
 from scripts.inference.scan_video_hit_rgb import load_model as load_hit_model, scan_video
 from scripts.training.train_shuttleset_rgb_multitask import MultiTaskR2Plus1D
-from scripts.training.train_hit_candidate_selector import candidate_features
+from scripts.training.train_hit_candidate_selector import candidate_features, selector_probability
 
 
 def parse_args() -> argparse.Namespace:
@@ -170,14 +170,6 @@ def candidate_quality(item: dict[str, object]) -> float:
     # Confidence and top-2 margin measure classification stability; HIT and
     # trajectory coverage keep visually implausible candidates from winning.
     return hit_score * (0.55 * confidence + 0.30 * margin + 0.15 * track_bonus)
-
-
-def selector_probability(features: list[float], selector: dict[str, object]) -> float:
-    logit = float(selector["intercept"]) + sum(
-        float(weight) * float(value)
-        for weight, value in zip(selector["coefficient"], features)
-    )
-    return 1.0 / (1.0 + math.exp(-max(-50.0, min(50.0, logit))))
 
 
 def score(rows: list[dict[str, object]], branch: str) -> dict[str, object]:

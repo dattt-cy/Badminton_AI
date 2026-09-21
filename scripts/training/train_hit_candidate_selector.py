@@ -5,16 +5,22 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 from pathlib import Path
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, f1_score, roc_auc_score
 
 from ai_classifier.localization import HitEvent, temporal_nms
 
 
-FEATURES = ["hit_score", "local_contrast", "previous_gap", "next_gap", "side_upper"]
+FEATURES = [
+    "hit_score", "local_contrast", "previous_gap", "next_gap", "side_upper",
+    "previous_score", "next_score", "score_mean_30", "score_std_30",
+    "candidate_count_30", "opposite_gap", "opposite_score", "peak_balance",
+]
 
 
 def select_f1_threshold(labels: np.ndarray, probabilities: np.ndarray) -> dict[str, float]:
@@ -44,6 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--threshold", type=float, default=0.3)
     parser.add_argument("--nms-radius", type=int, default=8)
     parser.add_argument("--tolerance", type=int, default=5)
+    parser.add_argument("--model", choices=("logistic", "random_forest"), default="random_forest")
     return parser.parse_args()
 
 
@@ -64,15 +71,77 @@ def candidate_features(candidates: list[HitEvent], index: int) -> list[float]:
     position = same.index(item)
     previous_gap = item.frame - same[position - 1].frame if position else 120
     next_gap = same[position + 1].frame - item.frame if position + 1 < len(same) else 120
-    neighbors = [event.score for event in candidates if 0 < abs(event.frame - item.frame) <= 30]
+    previous_score = same[position - 1].score if position else 0.0
+    next_score = same[position + 1].score if position + 1 < len(same) else 0.0
+    local = [event for event in candidates if abs(event.frame - item.frame) <= 30]
+    neighbors = [event.score for event in local if event is not item]
     neighbor_score = max(neighbors) if neighbors else 0.0
+    opposite = [event for event in candidates if event.side != item.side]
+    nearest_opposite = min(opposite, key=lambda event: abs(event.frame - item.frame), default=None)
+    opposite_gap = abs(nearest_opposite.frame - item.frame) if nearest_opposite else 120
+    opposite_score = nearest_opposite.score if nearest_opposite else 0.0
     return [
         item.score,
         item.score - neighbor_score,
         min(previous_gap, 120) / 120.0,
         min(next_gap, 120) / 120.0,
         1.0 if item.side == "upper" else 0.0,
+        previous_score,
+        next_score,
+        float(np.mean([event.score for event in local])),
+        float(np.std([event.score for event in local])),
+        min(len(local), 20) / 20.0,
+        min(opposite_gap, 120) / 120.0,
+        opposite_score,
+        item.score - 0.5 * (previous_score + next_score),
     ]
+
+
+def build_model(kind: str):
+    if kind == "logistic":
+        return LogisticRegression(class_weight="balanced", max_iter=2000, random_state=20260920)
+    return RandomForestClassifier(
+        n_estimators=160, max_depth=9, min_samples_leaf=8,
+        max_features="sqrt", class_weight="balanced_subsample",
+        n_jobs=-1, random_state=20260920,
+    )
+
+
+def serialize_forest(model: RandomForestClassifier) -> list[dict[str, object]]:
+    trees = []
+    for estimator in model.estimators_:
+        tree = estimator.tree_
+        values = tree.value[:, 0, :]
+        positive = values[:, 1] / np.maximum(values.sum(axis=1), 1e-12)
+        trees.append({
+            "children_left": tree.children_left.tolist(),
+            "children_right": tree.children_right.tolist(),
+            "feature": tree.feature.tolist(),
+            "threshold": tree.threshold.tolist(),
+            "positive_probability": positive.tolist(),
+        })
+    return trees
+
+
+def selector_probability(features: list[float], selector: dict[str, object]) -> float:
+    if selector.get("model") != "random_forest":
+        logit = float(selector["intercept"]) + sum(
+            float(weight) * float(value)
+            for weight, value in zip(selector["coefficient"], features)
+        )
+        return 1.0 / (1.0 + math.exp(-max(-50.0, min(50.0, logit))))
+    probabilities = []
+    for tree in selector["trees"]:
+        node = 0
+        while int(tree["children_left"][node]) >= 0:
+            feature = int(tree["feature"][node])
+            node = int(
+                tree["children_left"][node]
+                if features[feature] <= float(tree["threshold"][node])
+                else tree["children_right"][node]
+            )
+        probabilities.append(float(tree["positive_probability"][node]))
+    return float(np.mean(probabilities))
 
 
 def main() -> None:
@@ -105,14 +174,14 @@ def main() -> None:
             groups.append(match_id)
     x = np.asarray(rows, dtype=np.float64)
     y = np.asarray(labels, dtype=np.int64)
-    model = LogisticRegression(class_weight="balanced", max_iter=2000, random_state=20260920)
+    model = build_model(args.model)
     cross_validation = []
     out_of_fold_probabilities = np.zeros(len(y), dtype=np.float64)
     group_array = np.asarray(groups)
     for held_out in sorted(set(groups), key=int):
         train_mask = group_array != held_out
         test_mask = group_array == held_out
-        fold = LogisticRegression(class_weight="balanced", max_iter=2000, random_state=20260920)
+        fold = build_model(args.model)
         fold.fit(x[train_mask], y[train_mask])
         fold_probabilities = fold.predict_proba(x[test_mask])[:, 1]
         out_of_fold_probabilities[test_mask] = fold_probabilities
@@ -129,10 +198,8 @@ def main() -> None:
     probabilities = model.predict_proba(x)[:, 1]
     predictions = probabilities >= calibration["threshold"]
     result = {
-        "model": "logistic_regression",
+        "model": "random_forest" if args.model == "random_forest" else "logistic_regression",
         "features": FEATURES,
-        "coefficient": model.coef_[0].tolist(),
-        "intercept": float(model.intercept_[0]),
         "threshold": calibration["threshold"],
         "out_of_fold_calibration": calibration,
         "training_candidates": len(y),
@@ -152,6 +219,12 @@ def main() -> None:
             "side_aware": True,
         },
     }
+    if args.model == "random_forest":
+        result["trees"] = serialize_forest(model)
+        result["feature_importances"] = model.feature_importances_.tolist()
+    else:
+        result["coefficient"] = model.coef_[0].tolist()
+        result["intercept"] = float(model.intercept_[0])
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({key: result[key] for key in (

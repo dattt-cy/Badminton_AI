@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import math
 import sys
 import time
 from pathlib import Path
@@ -34,7 +33,7 @@ from ai_classifier.localization.live_gate import frame_is_live
 from scripts.inference.auto_court_detection import detect_court_corners
 from scripts.inference.classify_shuttleset_fusion_video import classify_fusion_event
 from scripts.inference.scan_video_hit_rgb import load_model as load_hit_model, scan_video
-from scripts.training.train_hit_candidate_selector import candidate_features
+from scripts.training.train_hit_candidate_selector import candidate_features, selector_probability
 from scripts.training.train_shuttleset_feature_fusion import FusionHead
 from scripts.training.train_shuttleset_rgb_multitask import MultiTaskR2Plus1D
 
@@ -109,14 +108,6 @@ def file_identity(path: Path) -> dict[str, object]:
 def stable_digest(payload: object, length: int = 16) -> str:
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:length]
-
-
-def selector_probability(features: list[float], selector: dict[str, object]) -> float:
-    logit = float(selector["intercept"]) + sum(
-        float(weight) * float(value)
-        for weight, value in zip(selector["coefficient"], features)
-    )
-    return 1.0 / (1.0 + math.exp(-max(-50.0, min(50.0, logit))))
 
 
 def select_hit_events(
