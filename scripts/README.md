@@ -2,6 +2,28 @@
 
 Run commands from the repository root after `python -m pip install -e .`.
 
+## Long-video stroke timeline
+
+The canonical inference path is:
+
+```text
+HIT scan -> learned selector -> FastTrackNet -> fusion -> physics -> timeline.json
+```
+
+Run it on a rally, match segment, or a video of at least 10 minutes:
+
+```powershell
+python scripts/inference/analyze_long_video.py "C:\path\match.mp4" `
+  --output-dir work_dirs/long_video_eval `
+  --hit-checkpoint work_dirs/r2plus1d18_hit_full/best.pth `
+  --hit-selector outputs/hit_selector_val/selector.json
+```
+
+The output directory stores the dense HIT scan, event-level results,
+event-frame-aware trajectory caches, and the resumable `timeline.json`. Re-run
+the same command to continue incomplete work. Use `--force-scan` or
+`--force-events` only when the corresponding cached stage must be rebuilt.
+
 ## Data workflows
 
 - `data/pose/`: batch pose extraction for raw, manual, and reference clips.
