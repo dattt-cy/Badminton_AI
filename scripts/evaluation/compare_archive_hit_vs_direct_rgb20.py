@@ -201,7 +201,7 @@ def main() -> None:
     stroke_model.to(device).eval()
     pose_model = YOLO(str(args.pose_model))
     selector = (
-        json.loads(args.hit_selector.read_text(encoding="utf-8"))
+        json.loads(args.hit_selector.read_text(encoding="utf-8-sig"))
         if args.hit_selector is not None else None
     )
     if args.event_selection == "learned" and selector is None:

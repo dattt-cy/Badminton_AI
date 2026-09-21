@@ -184,7 +184,7 @@ def main() -> None:
 
     meta = video_metadata(args.video)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    selector = json.loads(args.hit_selector.read_text(encoding="utf-8"))
+    selector = json.loads(args.hit_selector.read_text(encoding="utf-8-sig"))
     selector_threshold = float(
         args.selector_threshold if args.selector_threshold is not None
         else selector.get("threshold", 0.5)
