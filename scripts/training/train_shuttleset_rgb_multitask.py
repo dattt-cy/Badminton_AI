@@ -93,6 +93,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--shuttle-top-sample-boost", type=float, default=1.0)
     parser.add_argument("--shuttle-drive-sample-boost", type=float, default=1.0)
     parser.add_argument("--shuttle-forehand-sample-boost", type=float, default=1.0)
+    parser.add_argument(
+        "--stroke-class-boost", nargs="*", default=[], metavar="CLASS=WEIGHT",
+        help="Multiply loss weights for selected stroke classes, e.g. drive=1.8 net_attack=1.6.",
+    )
     parser.add_argument("--freeze-backbone", action="store_true")
     parser.add_argument(
         "--unfreeze-layer4", action="store_true",
@@ -647,14 +651,19 @@ def main() -> None:
         [record for record in train_records if record.sample_id not in train_zero_stroke_ids]
         + list(fine_train_records), STROKE_CLASSES, "coarse_label"
     )
-    # Boost hard classes once. Keep these multipliers explicit so repeated
-    # fine-tuning edits cannot accidentally compound a class weight.
-    lift_idx = STROKE_CLASSES.index("lift")
-    clear_idx = STROKE_CLASSES.index("clear")
-    drive_idx = STROKE_CLASSES.index("drive")
-    stroke_weights[lift_idx] *= 2.2
-    stroke_weights[drive_idx] *= 1.4
-    stroke_weights[clear_idx] *= 1.8
+    boosts = {}
+    for value in args.stroke_class_boost:
+        if "=" not in value:
+            raise ValueError(f"Expected CLASS=WEIGHT for --stroke-class-boost, got: {value}")
+        name, raw_weight = value.split("=", 1)
+        if name not in STROKE_CLASSES:
+            raise ValueError(f"Unknown stroke class boost: {name}")
+        weight = float(raw_weight)
+        if weight <= 0:
+            raise ValueError(f"Stroke class boost must be positive: {value}")
+        boosts[name] = weight
+    for name, weight in boosts.items():
+        stroke_weights[STROKE_CLASSES.index(name)] *= weight
     print(f"[INFO] Custom Stroke Class Weights:")
     for cls_name, w in zip(STROKE_CLASSES, stroke_weights):
         print(f"  {cls_name:<12}: {float(w):.3f}")
@@ -740,6 +749,7 @@ def main() -> None:
                 "fine_stroke_loss_weight": args.fine_stroke_loss_weight,
                 "shuttle_stroke_loss_weight": args.shuttle_stroke_loss_weight,
                 "shuttle_stroke_exclude_raw_label": args.shuttle_stroke_exclude_raw_label,
+                "stroke_class_boost": boosts,
                 "optimizer": optimizer.state_dict(), "scaler": scaler.state_dict(),
             }
             torch.save(state_dict_payload, args.output_dir / "latest.pth")
@@ -782,6 +792,7 @@ def main() -> None:
             "fine_stroke_loss_weight": args.fine_stroke_loss_weight,
             "shuttle_stroke_loss_weight": args.shuttle_stroke_loss_weight,
             "shuttle_stroke_exclude_raw_label": args.shuttle_stroke_exclude_raw_label,
+            "stroke_class_boost": boosts,
             "shuttle_top_sample_boost": args.shuttle_top_sample_boost,
             "shuttle_drive_sample_boost": args.shuttle_drive_sample_boost,
             "shuttle_forehand_sample_boost": args.shuttle_forehand_sample_boost,
