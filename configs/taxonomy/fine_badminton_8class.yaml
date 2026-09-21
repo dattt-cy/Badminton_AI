@@ -1,0 +1,107 @@
+version: 1
+dataset: Fine-Badminton
+coarse_classes:
+  - serve
+  - clear
+  - smash
+  - drop
+  - net_shot
+  - lift
+  - drive
+  - net_attack
+
+canonical_labels:
+  Short Serve:
+    coarse: serve
+    aliases: [Short Serve, 发小球]
+  High Serve:
+    coarse: serve
+    aliases: [High Serve, 发高远球]
+  Flat Serve:
+    coarse: serve
+    aliases: [Flat Serve, 发平高球]
+
+  High Clear:
+    coarse: clear
+    aliases: [High Clear, 高远球]
+  Flat Clear:
+    coarse: clear
+    aliases: [Flat Clear, 平高球]
+  Clear Return of Serve:
+    coarse: clear
+    aliases: [Clear Return of Serve, 接发球击高远球]
+
+  Smash(Full-length):
+    coarse: smash
+    aliases: [Smash(Full-length), 长杀]
+  Short Smash:
+    coarse: smash
+    aliases: [Short Smash, 短杀]
+  Jump Smash:
+    coarse: smash
+    aliases: [Jump Smash, 中场腾空抽杀球]
+  Smash Return of Serve:
+    coarse: smash
+    aliases: [Smash Return of Serve, 接发球击杀球]
+
+  Drop Shot:
+    coarse: drop
+    aliases: [Drop Shot, 吊球, 劈球]
+  Drop Shot Return of Smash:
+    coarse: drop
+    aliases: [Drop Shot Return of Smash, 接杀放小球]
+  Drop Shot Return of Serve:
+    coarse: drop
+    aliases: [Drop Shot Return of Serve, 接发球击吊球]
+
+  Net Shot:
+    coarse: net_shot
+    aliases: [Net Shot, 放小球]
+  Soft Net Shot:
+    coarse: net_shot
+    aliases: [Soft Net Shot, 搓球]
+  Overhead Cross-court Net Shot:
+    coarse: net_shot
+    aliases: [Overhead Cross-court Net Shot, 高手位勾球]
+  Underhead Cross-court Net Shot:
+    coarse: net_shot
+    aliases: [Underhead Cross-court Net Shot, 低手位勾球]
+  Soft Net Shot Return of Serve:
+    coarse: net_shot
+    aliases: [Soft Net Shot Return of Serve, 接发球搓小球]
+  Cross-court Net Return of Serve:
+    coarse: net_shot
+    aliases: [Cross-court Net Return of Serve, 接发球勾球]
+  Cross-court Net Return of Smash:
+    coarse: net_shot
+    aliases: [Cross-court Net Return of Smash, 接杀勾球]
+  Net Shot Return of Serve:
+    coarse: net_shot
+    aliases: [Net Shot Return of Serve, 接发球放小球]
+
+  Lift:
+    coarse: lift
+    aliases: [Lift, 挑高球]
+  Lift Return of Serve:
+    coarse: lift
+    aliases: [Lift Return of Serve, 接发球挑球]
+  Lift Return of Smash:
+    coarse: lift
+    aliases: [Lift Return of Smash, 接杀挑高球]
+  Defensive Lift:
+    coarse: lift
+    aliases: [Defensive Lift, 防守回挑]
+
+  Drive:
+    coarse: drive
+    aliases: [Drive, 抽球]
+  Drive Return of Smash:
+    coarse: drive
+    aliases: [Drive Return of Smash, 防守回抽]
+
+  Push Shot:
+    coarse: net_attack
+    aliases: [Push Shot, 平推球, 接发球推球]
+  Net Kill:
+    coarse: net_attack
+    aliases: [Net Kill, 扑球]

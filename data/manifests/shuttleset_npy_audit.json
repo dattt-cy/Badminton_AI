@@ -1,0 +1,38 @@
+{
+  "npy_root": "C:\\Users\\ADMIN\\Downloads\\dataset_npy_between_2_hits_with_max_limits\\dataset_npy_between_2_hits_with_max_limits",
+  "total_samples": 33481,
+  "valid_stroke_side_samples": 32169,
+  "valid_coarse_label_samples": 32166,
+  "invalid_stroke_side_samples": 1312,
+  "split_counts": {
+    "test": 3499,
+    "train": 25741,
+    "val": 4241
+  },
+  "valid_stroke_side_split_counts": {
+    "test": 3335,
+    "train": 24836,
+    "val": 3998
+  },
+  "stroke_side_counts": {
+    "backhand": 12540,
+    "forehand": 16410,
+    "aroundhead": 3219
+  },
+  "coarse_label_counts": {
+    "serve": 2196,
+    "net_attack": 3120,
+    "drop": 3175,
+    "lift": 5152,
+    "smash": 3921,
+    "net_shot": 10421,
+    "clear": 2661,
+    "drive": 1520
+  },
+  "issues": {
+    "raw_label_mismatch": 3904,
+    "annotation_flaw": 1311,
+    "unknown_coarse_label": 1278,
+    "unknown_stroke_side": 1
+  }
+}
