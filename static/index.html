@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Badminton Shot Classifier</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }
+        .container { max-width: 960px; margin: 0 auto; }
+        header { text-align: center; padding: 30px 0 25px; }
+        header h1 {
+            font-size: 2.2em;
+            background: linear-gradient(90deg, #00c6ff, #0072ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 6px;
+        }
+        header p { color: #aaa; font-size: 1em; }
+
+        .card {
+            background: rgba(255,255,255,0.07);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 18px;
+            padding: 25px;
+            margin-bottom: 20px;
+        }
+        .card h3 { margin-bottom: 15px; font-size: 1em; color: #aaa; text-transform: uppercase; letter-spacing: 1px; }
+
+        /* Step badge */
+        .step-badge {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 28px; height: 28px; border-radius: 50%;
+            background: linear-gradient(135deg, #00c6ff, #0072ff);
+            font-size: 0.85em; font-weight: 700; margin-right: 10px;
+        }
+        .step-title { font-size: 1.05em; font-weight: 600; margin-bottom: 15px; display: flex; align-items: center; }
+
+        /* Path input */
+        .path-row { display: flex; gap: 10px; }
+        .path-input {
+            flex: 1; padding: 12px 16px;
+            border-radius: 10px; border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(255,255,255,0.08); color: #fff;
+            font-size: 0.95em; outline: none;
+        }
+        .path-input:focus { border-color: #00c6ff; }
+        .btn {
+            padding: 11px 24px; border-radius: 50px; border: none;
+            background: linear-gradient(90deg, #00c6ff, #0072ff);
+            color: #fff; font-size: 0.95em; font-weight: 600;
+            cursor: pointer; transition: opacity 0.2s; white-space: nowrap;
+        }
+        .btn:hover { opacity: 0.85; }
+        .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        .btn-outline {
+            background: transparent;
+            border: 1px solid rgba(255,255,255,0.3);
+            color: #ccc;
+        }
+        .btn-outline:hover { border-color: #00c6ff; color: #00c6ff; background: transparent; }
+
+        /* Canvas corner picker */
+        #courtPickerWrap { display: none; }
+        .canvas-container {
+            position: relative; width: 100%; cursor: crosshair;
+            border-radius: 12px; overflow: hidden;
+            border: 1px solid rgba(255,255,255,0.15);
+        }
+        #courtCanvas { display: block; width: 100%; height: auto; }
+        .corner-guide {
+            display: grid; grid-template-columns: 1fr 1fr;
+            gap: 8px; margin-bottom: 15px;
+        }
+        .corner-guide-item {
+            display: flex; align-items: center; gap: 8px;
+            background: rgba(255,255,255,0.05); border-radius: 8px; padding: 8px 12px;
+            font-size: 0.85em;
+        }
+        .corner-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+        .done-mark { margin-left: auto; color: #00ff88; font-weight: 700; display: none; }
+        .corner-hint { text-align: center; color: #aaa; font-size: 0.85em; margin-bottom: 10px; }
+        .corner-actions { display: flex; gap: 10px; margin-top: 12px; }
+
+        /* Progress */
+        #progressCard { display: none; }
+        .progress-bar-wrap {
+            background: rgba(255,255,255,0.1); border-radius: 10px;
+            height: 8px; overflow: hidden; margin: 12px 0 6px;
+        }
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #00c6ff, #0072ff);
+            border-radius: 10px; transition: width 0.5s ease;
+        }
+        .spinner-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+        .spinner {
+            width: 18px; height: 18px;
+            border: 3px solid rgba(255,255,255,0.15);
+            border-top-color: #00c6ff;
+            border-radius: 50%; animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Result */
+        #resultCard { display: none; }
+        .result-main { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 15px 0; }
+        .result-box {
+            background: rgba(255,255,255,0.06); border-radius: 14px;
+            padding: 18px; text-align: center;
+        }
+        .result-box .label { color: #aaa; font-size: 0.78em; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+        .result-box .value { font-size: 1.7em; font-weight: 700; }
+        .result-box .conf { color: #00c6ff; font-size: 0.85em; margin-top: 4px; }
+        .stroke-color { color: #00ff88; }
+        .side-color { color: #ff9f40; }
+
+        .ranking-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+        .ranking-box { background: rgba(255,255,255,0.04); border-radius: 12px; padding: 14px; }
+        .ranking-box .r-title { font-size: 0.8em; color: #aaa; margin-bottom: 10px; }
+        .rank-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+        .rank-row:last-child { margin-bottom: 0; }
+        .rank-label { width: 85px; font-size: 0.82em; }
+        .rank-bar-wrap { flex: 1; background: rgba(255,255,255,0.08); border-radius: 4px; height: 7px; overflow: hidden; }
+        .rank-bar { height: 100%; border-radius: 4px; background: linear-gradient(90deg, #00c6ff, #0072ff); }
+        .rank-pct { font-size: 0.78em; color: #aaa; width: 34px; text-align: right; }
+
+        /* Error */
+        #errorCard {
+            display: none; background: rgba(255,60,60,0.1);
+            border: 1px solid rgba(255,60,60,0.3); border-radius: 14px; padding: 20px;
+            margin-bottom: 20px;
+        }
+        #errorCard h4 { color: #ff6b6b; margin-bottom: 6px; }
+        #errorCard p { color: #faa; font-size: 0.9em; }
+
+        @media (max-width: 600px) {
+            .result-main, .ranking-grid { grid-template-columns: 1fr; }
+            .corner-guide { grid-template-columns: 1fr 1fr; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <header>
+        <h1>🏸 Badminton Shot Classifier</h1>
+        <p>Nhập đường dẫn video → Chọn góc sân → AI phân loại cú đánh</p>
+    </header>
+
+    <!-- Step 1: Path -->
+    <div class="card">
+        <div class="step-title"><span class="step-badge">1</span> Nhập đường dẫn video</div>
+        <div class="path-row">
+            <input type="text" class="path-input" id="pathInput"
+                placeholder='VD: C:\Users\ADMIN\Downloads\archive\forehand_drive\086.mp4'
+                onkeydown="if(event.key==='Enter') loadFrame()">
+            <button class="btn" onclick="loadFrame()" id="btnLoad">📂 Tải frame</button>
+        </div>
+        <div style="margin-top:8px;font-size:0.8em;color:#888;">💡 Có thể paste cả đường dẫn có dấu ngoặc kép</div>
+    </div>
+
+    <!-- Step 2: Click corners -->
+    <div class="card" id="courtPickerWrap">
+        <div class="step-title"><span class="step-badge">2</span> Click chọn 4 góc sân (theo thứ tự)</div>
+        <div class="corner-guide">
+            <div class="corner-guide-item" id="ci0">
+                <div class="corner-dot" style="background:#ff4757"></div>
+                <span>① Gần - Trái (Góc dưới bên trái)</span>
+                <span class="done-mark" id="dm0">✓</span>
+            </div>
+            <div class="corner-guide-item" id="ci1">
+                <div class="corner-dot" style="background:#2ed573"></div>
+                <span>② Gần - Phải (Góc dưới bên phải)</span>
+                <span class="done-mark" id="dm1">✓</span>
+            </div>
+            <div class="corner-guide-item" id="ci2">
+                <div class="corner-dot" style="background:#1e90ff"></div>
+                <span>③ Xa - Phải (Góc trên bên phải)</span>
+                <span class="done-mark" id="dm2">✓</span>
+            </div>
+            <div class="corner-guide-item" id="ci3">
+                <div class="corner-dot" style="background:#ffa502"></div>
+                <span>④ Xa - Trái (Góc trên bên trái)</span>
+                <span class="done-mark" id="dm3">✓</span>
+            </div>
+        </div>
+        <p class="corner-hint" id="cornerHint">👆 Click vào góc <strong>Gần - Trái</strong> của sân</p>
+        <div class="canvas-container">
+            <canvas id="courtCanvas"></canvas>
+        </div>
+        <div class="corner-actions">
+            <button class="btn btn-outline" onclick="resetCorners()">↺ Xóa điểm</button>
+            <button class="btn" onclick="submitAnalysis()" id="btnAnalyze" disabled>🚀 Phân tích</button>
+        </div>
+    </div>
+
+    <!-- Progress -->
+    <div class="card" id="progressCard">
+        <div class="spinner-row">
+            <div class="spinner"></div>
+            <span id="progressFile" style="font-size:0.95em"></span>
+        </div>
+        <div class="progress-bar-wrap">
+            <div class="progress-bar" id="progressBar" style="width:0%"></div>
+        </div>
+        <div id="progressStep" style="color:#aaa;font-size:0.85em">Đang chuẩn bị...</div>
+    </div>
+
+    <!-- Error -->
+    <div id="errorCard">
+        <h4>⚠️ Lỗi</h4>
+        <p id="errorMsg"></p>
+    </div>
+
+    <!-- Result -->
+    <div class="card" id="resultCard">
+        <div class="step-title" style="margin-bottom:0">✅ Kết quả phân loại</div>
+        <div style="margin-bottom:15px"><span id="resultFile" style="background:rgba(0,198,255,.15);border-radius:6px;padding:3px 10px;font-size:0.82em;color:#00c6ff"></span></div>
+        <div class="result-main">
+            <div class="result-box">
+                <div class="label">Loại cú đánh</div>
+                <div class="value stroke-color" id="rStroke">-</div>
+                <div class="conf" id="rStrokeConf"></div>
+            </div>
+            <div class="result-box">
+                <div class="label">Kỹ thuật</div>
+                <div class="value side-color" id="rSide">-</div>
+                <div class="conf" id="rSideConf"></div>
+            </div>
+        </div>
+        <div class="ranking-grid">
+            <div class="ranking-box">
+                <div class="r-title">📊 Xếp hạng loại cú đánh</div>
+                <div id="rankStroke"></div>
+            </div>
+            <div class="ranking-box">
+                <div class="r-title">📊 Xếp hạng kỹ thuật</div>
+                <div id="rankSide"></div>
+            </div>
+        </div>
+        <div style="text-align:center;margin-top:18px">
+            <button class="btn btn-outline" onclick="resetAll()">🔄 Phân tích video khác</button>
+        </div>
+    </div>
+</div>
+
+<script>
+const STROKE_VI = {
+    drive:'Tạt ngang (Drive)', clear:'Lốp cầu (Clear)', smash:'Smash',
+    drop:'Phông/Chặt (Drop)', net_shot:'Bỏ nhỏ (Net Shot)',
+    lift:'Đẩy lên (Lift)', net_attack:'Net Kill', serve:'Giao cầu'
+};
+const SIDE_VI = {
+    forehand:'Thuận tay (Forehand)',
+    backhand:'Trái tay (Backhand)',
+    aroundhead:'Đập đầu (Aroundhead)'
+};
+const CORNER_COLORS = ['#ff4757','#2ed573','#1e90ff','#ffa502'];
+const CORNER_LABELS = ['Gần-Trái','Gần-Phải','Xa-Phải','Xa-Trái'];
+const CORNER_HINTS = [
+    'Click vào góc <strong>Gần - Trái</strong> của sân',
+    'Click vào góc <strong>Gần - Phải</strong> của sân',
+    'Click vào góc <strong>Xa - Phải</strong> của sân',
+    'Click vào góc <strong>Xa - Trái</strong> của sân',
+    '✅ Đủ 4 góc! Nhấn <strong>Phân tích</strong> để bắt đầu'
+];
+
+let corners = [];   // pixel coords on canvas
+let origW = 1, origH = 1;  // actual frame size
+let currentPath = '';
+let pollTimer = null;
+
+const canvas = document.getElementById('courtCanvas');
+const ctx = canvas.getContext('2d');
+let img = new Image();
+
+// ---- Load first frame ----
+async function loadFrame() {
+    const raw = document.getElementById('pathInput').value.trim().replace(/^["']|["']$/g,'');
+    if (!raw) { alert('Vui lòng nhập đường dẫn!'); return; }
+    currentPath = raw;
+    document.getElementById('btnLoad').disabled = true;
+    document.getElementById('btnLoad').textContent = '⏳ Đang tải...';
+    hide('errorCard'); hide('resultCard'); hide('progressCard');
+
+    try {
+        const res = await fetch('/get_frame', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({path: raw})
+        });
+        if (!res.ok) { const e = await res.json(); throw new Error(e.detail); }
+        const {frame_b64, width, height} = await res.json();
+        origW = width; origH = height;
+        img.onload = () => {
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+            resetCorners();
+        };
+        img.src = 'data:image/jpeg;base64,' + frame_b64;
+        show('courtPickerWrap');
+    } catch(e) {
+        showError(e.message);
+    } finally {
+        document.getElementById('btnLoad').disabled = false;
+        document.getElementById('btnLoad').textContent = '📂 Tải frame';
+    }
+}
+
+// ---- Canvas click ----
+canvas.addEventListener('click', e => {
+    if (corners.length >= 4) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const cx = (e.clientX - rect.left) * scaleX;
+    const cy = (e.clientY - rect.top) * scaleY;
+    // Convert to original image coords
+    const ox = cx * origW / canvas.width;
+    const oy = cy * origH / canvas.height;
+    corners.push({cx, cy, ox, oy});
+    drawCanvas();
+    updateCornerUI();
+});
+
+function drawCanvas() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0);
+    if (corners.length >= 2) {
+        ctx.beginPath();
+        ctx.moveTo(corners[0].cx, corners[0].cy);
+        for (let i = 1; i < corners.length; i++) ctx.lineTo(corners[i].cx, corners[i].cy);
+        if (corners.length === 4) ctx.closePath();
+        ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([8,4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+    corners.forEach((pt, i) => {
+        ctx.beginPath();
+        ctx.arc(pt.cx, pt.cy, 9, 0, Math.PI*2);
+        ctx.fillStyle = CORNER_COLORS[i];
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 11px Segoe UI';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(i+1, pt.cx, pt.cy);
+        ctx.fillStyle = CORNER_COLORS[i];
+        ctx.font = '12px Segoe UI';
+        ctx.textAlign = 'left';
+        ctx.fillText(CORNER_LABELS[i], pt.cx+13, pt.cy-10);
+    });
+}
+
+function updateCornerUI() {
+    for (let i=0; i<4; i++) {
+        document.getElementById('dm'+i).style.display = i < corners.length ? 'inline' : 'none';
+    }
+    document.getElementById('cornerHint').innerHTML = CORNER_HINTS[Math.min(corners.length, 4)];
+    document.getElementById('btnAnalyze').disabled = corners.length < 4;
+}
+
+function resetCorners() {
+    corners = [];
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (img.src) ctx.drawImage(img, 0, 0);
+    updateCornerUI();
+}
+
+// ---- Submit ----
+async function submitAnalysis() {
+    if (corners.length < 4) return;
+    hide('courtPickerWrap'); hide('errorCard'); hide('resultCard');
+    show('progressCard');
+    document.getElementById('progressFile').textContent = currentPath.split(/[\\/]/).pop();
+    document.getElementById('progressBar').style.width = '5%';
+    document.getElementById('progressStep').textContent = 'Đang khởi động...';
+
+    // BL, BR, TR, TL → flatten for API
+    const flat = corners.flatMap(pt => [Math.round(pt.ox), Math.round(pt.oy)]);
+
+    try {
+        const res = await fetch('/classify_path', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({path: currentPath, corners: flat})
+        });
+        if (!res.ok) { const e = await res.json(); throw new Error(e.detail); }
+        const {job_id} = await res.json();
+        pollStatus(job_id);
+    } catch(e) {
+        hide('progressCard');
+        show('courtPickerWrap');
+        showError(e.message);
+    }
+}
+
+function pollStatus(jobId) {
+    pollTimer = setInterval(async () => {
+        try {
+            const res = await fetch('/status/'+jobId);
+            const job = await res.json();
+            document.getElementById('progressBar').style.width = job.progress+'%';
+            document.getElementById('progressStep').textContent = job.step || '...';
+            if (job.status === 'done') { clearInterval(pollTimer); hide('progressCard'); showResult(job.result); }
+            else if (job.status === 'error') { clearInterval(pollTimer); hide('progressCard'); show('courtPickerWrap'); showError(job.step); }
+        } catch {}
+    }, 3000);
+}
+
+function showResult(r) {
+    show('resultCard');
+    document.getElementById('resultFile').textContent = '📹 ' + currentPath.split(/[\\/]/).pop();
+    document.getElementById('rStroke').textContent = STROKE_VI[r.stroke.label] || r.stroke.label;
+    document.getElementById('rStrokeConf').textContent = 'Tự tin: '+(r.stroke.probability*100).toFixed(1)+'%';
+    document.getElementById('rSide').textContent = SIDE_VI[r.stroke_side.label] || r.stroke_side.label;
+    document.getElementById('rSideConf').textContent = 'Tự tin: '+(r.stroke_side.probability*100).toFixed(1)+'%';
+    document.getElementById('rankStroke').innerHTML = r.stroke_ranking.slice(0,5).map(x =>
+        `<div class="rank-row"><span class="rank-label">${(STROKE_VI[x.label]||x.label).split('(')[0].trim()}</span>
+        <div class="rank-bar-wrap"><div class="rank-bar" style="width:${(x.probability*100).toFixed(0)}%"></div></div>
+        <span class="rank-pct">${(x.probability*100).toFixed(0)}%</span></div>`).join('');
+    document.getElementById('rankSide').innerHTML = r.stroke_side_ranking.map(x =>
+        `<div class="rank-row"><span class="rank-label">${(SIDE_VI[x.label]||x.label).split('(')[0].trim()}</span>
+        <div class="rank-bar-wrap"><div class="rank-bar" style="width:${(x.probability*100).toFixed(0)}%"></div></div>
+        <span class="rank-pct">${(x.probability*100).toFixed(0)}%</span></div>`).join('');
+}
+
+function showError(msg) { show('errorCard'); document.getElementById('errorMsg').textContent = msg; }
+function show(id) { document.getElementById(id).style.display='block'; }
+function hide(id) { document.getElementById(id).style.display='none'; }
+function resetAll() {
+    if (pollTimer) clearInterval(pollTimer);
+    hide('resultCard'); hide('errorCard'); hide('progressCard');
+    show('courtPickerWrap'); resetCorners();
+}
+</script>
+</body>
+</html>
+

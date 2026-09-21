@@ -28,7 +28,9 @@ class FakeBackend:
         result = output_dir / "analysis.json"
         result.write_text(json.dumps(payload), encoding="utf-8")
         (output_dir / "user_report.md").write_text("# Report\n", encoding="utf-8")
-        (output_dir / "skeleton_preview.mp4").write_bytes(b"skeleton-video")
+        (output_dir / "pose_viewer.json").write_text(
+            '{"version":1,"layout":"coco17","fps":30,"frame_count":1,"frames":[]}'
+        )
         return result
 
 
@@ -67,7 +69,7 @@ def test_create_poll_and_download_analysis(tmp_path: Path) -> None:
         assert job["status"] == "succeeded"
         assert set(job["artifact_urls"]) == {
             "analysis.json",
-            "skeleton_preview.mp4",
+            "pose_viewer.json",
             "user_report.md",
         }
 
@@ -93,8 +95,13 @@ def test_web_app_and_health_expose_runtime_capabilities(tmp_path: Path) -> None:
     assert "Badminton Form Lab" in page.text
     assert "id=\"analysisForm\"" in page.text
     assert "id=\"evidenceModal\"" in page.text
-    assert "id=\"showSkeleton\"" in page.text
-    assert "skeleton_preview.mp4" in page.text
+    assert "id=\"poseCanvas\"" in page.text
+    assert "Skeleton 3D Viewer" in page.text
+    assert "Khuỷu trái" in page.text
+    assert "Gối phải" in page.text
+    assert "id=\"angleLeftElbow\"" in page.text
+    assert "id=\"angleRightKnee\"" in page.text
+    assert "Đã kiểm tra" in page.text
     assert "Phát lại 2 lần" in page.text
     assert "AI chưa thể kết luận" in page.text
     assert health.json() == {

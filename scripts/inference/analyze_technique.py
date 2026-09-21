@@ -91,6 +91,60 @@ REVIEW_TIPS = {
     ("wrist_vertical_excursion", None):
         "Kiểm tra xem đường vung có đi từ thấp lên cao đủ rõ không.",
 }
+QUALITATIVE_MEASUREMENTS = {
+    "non_racket_arm_coordination": {
+        "current": "Tay phụ có nâng định hướng rồi hạ xuống",
+        "target": "Đúng thứ tự chuẩn bị → tăng tốc",
+        "gap": "Đã quan sát được",
+    },
+    "arm_reach_excursion": {
+        "current": "Tay đánh có cả pha thu và pha vươn",
+        "target": "Không giữ tay ở một độ dài cố định",
+        "gap": "Đã quan sát được",
+    },
+    "followthrough_completion": {
+        "current": "Tay tiếp tục đi sau vùng tăng tốc",
+        "target": "Không dừng tay đột ngột sau cú đánh",
+        "gap": "Đã quan sát được",
+    },
+    "body_transfer": {
+        "current": "Có chuyển động thân và trọng tâm",
+        "target": "Phối hợp thân cùng nhịp vung tay",
+        "gap": "Đã quan sát được",
+    },
+    "recovery_balance": {
+        "current": "Trọng tâm trở lại vùng giữa hai chân",
+        "target": "Giữ thăng bằng sau khi kết thúc",
+        "gap": "Đã quan sát được",
+    },
+}
+CRITERION_PHASES = {
+    "contact_above_head": "contact_estimated",
+    "contact_ahead_of_body": "contact_estimated",
+    "contact_drive_height": "contact_estimated",
+    "non_racket_arm_coordination": "backswing",
+    "leg_loading": "preparation",
+    "racket_arm_preparation": "preparation",
+    "arm_extension_excursion": "forward_swing",
+    "arm_reach_excursion": "forward_swing",
+    "body_transfer": "forward_swing",
+    "followthrough_completion": "follow_through",
+    "recovery_balance": "follow_through",
+}
+MAINTENANCE_ACTIONS = {
+    "arm_extension_excursion": (
+        "Duy trì nhịp co–duỗi tay",
+        "Tập 5 lần chậm rồi 5 lần tốc độ thật, giữ khuỷu co khi chuẩn bị và duỗi rõ khi tăng tốc.",
+    ),
+    "leg_loading": (
+        "Duy trì độ chùng gối",
+        "Giữ độ chùng hiện tại khi chuẩn bị và duỗi chân cùng nhịp tăng tốc của tay.",
+    ),
+    "followthrough_completion": (
+        "Duy trì vung theo đà",
+        "Tiếp tục để tay đi tự nhiên sau cú đánh, không ghìm tay ngay sau tiếp xúc.",
+    ),
+}
 
 
 def safe_stem(path: Path) -> str:
@@ -135,6 +189,99 @@ def _display_observable_value(item: dict) -> str | None:
     return _display_value(value, item.get("unit"))
 
 
+def _format_metric_value(value: float, unit: str | None) -> str:
+    if unit == "degree":
+        return f"{value:.1f}°"
+    if unit in {"body_scale_ratio", "torso_height_ratio"}:
+        return f"{value * 100:.1f}% cơ thể"
+    return f"{value:.2f}"
+
+
+def _observable_measurement(item: dict) -> dict | None:
+    """Build a user-facing current/target/gap summary from a rule result."""
+    if item.get("observed") is None or not isinstance(item.get("threshold"), dict):
+        return None
+    observed = float(item["observed"])
+    unit = item.get("unit")
+    criterion = item.get("criterion")
+    if (
+        unit in {"body_scale_ratio", "torso_height_ratio"}
+        and criterion != "racket_arm_preparation"
+    ):
+        return None
+    threshold = item["threshold"]
+    boundary = None
+    direction = None
+    for key in ("minimum_degrees", "minimum"):
+        if threshold.get(key) is not None:
+            boundary, direction = float(threshold[key]), "minimum"
+            break
+    if boundary is None:
+        for key in ("maximum_degrees", "maximum"):
+            if threshold.get(key) is not None:
+                boundary, direction = float(threshold[key]), "maximum"
+                break
+    if boundary is None:
+        return None
+
+    tolerance = 3.0 if unit == "degree" else 0.03
+    signed_gap = observed - boundary if direction == "minimum" else boundary - observed
+    borderline = item.get("status") != "observed" and abs(signed_gap) <= tolerance
+    if criterion == "racket_arm_preparation" and unit == "body_scale_ratio":
+        current = "Cổ tay gần ngang vai" if borderline else (
+            "Cổ tay còn thấp so với vai" if observed < boundary else
+            "Cổ tay ngang vai hoặc cao hơn"
+        )
+        target = "Cổ tay ngang vai hoặc cao hơn trước khi tăng tốc"
+        gap_value = boundary - observed
+        gap = (
+            "Sát ranh giới đo; chưa đủ chắc để coi là lỗi"
+            if borderline else "Cần nâng cổ tay rõ ràng hơn về ngang vai"
+            if gap_value > 0 else "Đã đạt vị trí chuẩn bị"
+        )
+    elif criterion == "leg_loading" and unit == "degree":
+        current = f"Góc gối {observed:.0f}° (180° là chân thẳng)"
+        target = f"Không quá {boundary:.0f}° để có độ chùng"
+        gap = (
+            f"Đã chùng phù hợp, còn dư khoảng {abs(signed_gap):.0f}°"
+            if signed_gap >= 0 else f"Cần chùng thêm khoảng {abs(signed_gap):.0f}°"
+        )
+    elif criterion == "arm_extension_excursion" and unit == "degree":
+        current = f"Khuỷu thay đổi khoảng {observed:.0f}° trong cú đánh"
+        target = "Co khi chuẩn bị, duỗi rõ khi tăng tốc"
+        gap = "Biên độ gập–duỗi rõ" if signed_gap >= 0 else (
+            f"Cần tăng biên độ khoảng {abs(signed_gap):.0f}°"
+        )
+    else:
+        current = _format_metric_value(observed, unit)
+        target = (
+            f"Tối thiểu {_format_metric_value(boundary, unit)}"
+            if direction == "minimum"
+            else f"Tối đa {_format_metric_value(boundary, unit)}"
+        )
+        gap = (
+            f"Đạt ngưỡng, dư {_format_metric_value(abs(signed_gap), unit)}"
+            if signed_gap >= 0 else
+            f"Cần {'tăng' if direction == 'minimum' else 'giảm'} "
+            f"{_format_metric_value(abs(signed_gap), unit)}"
+        )
+    return {
+        "current": current,
+        "target": target,
+        "gap": gap,
+        "passed": item.get("status") == "observed",
+        "borderline": borderline,
+        "kind": "quantitative",
+    }
+
+
+def _qualitative_measurement(item: dict) -> dict | None:
+    values = QUALITATIVE_MEASUREMENTS.get(item.get("criterion"))
+    if values is None:
+        return None
+    return {**values, "passed": item.get("status") == "observed", "kind": "sequence"}
+
+
 def _phase_evidence(
     stroke: dict, phase: str | None, fps: float,
 ) -> dict | None:
@@ -152,19 +299,7 @@ def _phase_evidence(
 
 
 def _criterion_evidence(criterion: str, stroke: dict, fps: float) -> dict | None:
-    phase = {
-        "contact_above_head": "contact_estimated",
-        "contact_ahead_of_body": "contact_estimated",
-        "contact_drive_height": "contact_estimated",
-        "non_racket_arm_coordination": "backswing",
-        "leg_loading": "preparation",
-        "racket_arm_preparation": "preparation",
-        "arm_extension_excursion": "forward_swing",
-        "arm_reach_excursion": "forward_swing",
-        "body_transfer": "forward_swing",
-        "followthrough_completion": "follow_through",
-        "recovery_balance": "follow_through",
-    }.get(criterion)
+    phase = CRITERION_PHASES.get(criterion)
     return _phase_evidence(stroke, phase, fps)
 
 
@@ -176,6 +311,69 @@ def _measurement_evidence(
         "wrist_path_length": "forward_swing",
     }.get(feature)
     return _phase_evidence(stroke, evidence_phase, fps)
+
+
+def _add_measurement_context(
+    measurement: dict | None,
+    *,
+    phase: str | None,
+    moment: dict | None,
+    reliability: str,
+) -> dict | None:
+    if measurement is None:
+        return None
+    result = dict(measurement)
+    phase_label = PHASE_LABELS.get(phase, phase)
+    if moment:
+        result["when"] = (
+            f"{phase_label} · {moment['seconds']:.2f}s"
+            if phase_label else f"{moment['seconds']:.2f}s"
+        )
+    result["reliability"] = reliability
+    return result
+
+
+def _phase_timeline(strokes: list[dict], fps: float) -> list[dict]:
+    if not strokes or fps <= 0:
+        return []
+    stroke = strokes[0]
+    offset = int(stroke.get("start_frame", 0))
+    result = []
+    for phase, label in PHASE_LABELS.items():
+        frame_range = stroke.get("phases", {}).get(phase)
+        if not frame_range or len(frame_range) != 2:
+            continue
+        start = offset + int(frame_range[0])
+        end = offset + int(frame_range[1]) - 1
+        frame = int(round((start + end) / 2))
+        result.append({
+            "key": phase,
+            "label": label,
+            "frame": frame,
+            "seconds": round(frame / fps, 2),
+        })
+    return result
+
+
+def _maintenance_focus(observed: list[dict]) -> dict | None:
+    for criterion in MAINTENANCE_ACTIONS:
+        item = next(
+            (entry for entry in observed if entry.get("criterion") == criterion),
+            None,
+        )
+        if item is None:
+            continue
+        label, action = MAINTENANCE_ACTIONS[criterion]
+        return {
+            "mode": "maintain",
+            "label": label,
+            "observation": item["message"],
+            "action": action,
+            "moment": item.get("moment"),
+            "drill": [],
+            "measurement": item.get("measurement"),
+        }
+    return None
 
 
 def build_user_report(analysis: dict) -> dict:
@@ -193,27 +391,65 @@ def build_user_report(analysis: dict) -> dict:
         stroke = strokes[block_index] if block_index < len(strokes) else {}
         for item in block.get("good_signals", []):
             friendly = FRIENDLY_VALIDATED_SIGNALS.get(item.get("feature"))
+            display_value = _display_value(item.get("observed"), item.get("unit"))
+            moment = _phase_evidence(stroke, item.get("phase"), fps)
+            measurement = (
+                {
+                    "current": display_value,
+                    "target": "Trong vùng tham chiếu đã kiểm định",
+                    "gap": None,
+                    "passed": True,
+                    "kind": "quantitative",
+                }
+                if display_value else None
+            )
             observed.append({
+                "feature": item.get("feature"),
                 "label": friendly[0] if friendly else item["label"],
                 "message": friendly[1] if friendly else item["message"],
-                "value": _display_value(item.get("observed"), item.get("unit")),
+                "value": display_value,
+                "measurement": _add_measurement_context(
+                    measurement,
+                    phase=item.get("phase"),
+                    moment=moment,
+                    reliability="Tin cậy tốt",
+                ),
                 "evidence": "validated",
-                "moment": _phase_evidence(stroke, item.get("phase"), fps),
+                "moment": moment,
             })
         for item in block.get("heuristic_observations", []):
             target = observed if item["status"] == "observed" else needs_review
+            measurement = _observable_measurement(item) or _qualitative_measurement(item)
+            borderline = bool(measurement and measurement.get("borderline"))
+            message = (
+                OBSERVABLE_MESSAGES.get(item["criterion"], item["message"])
+                if item["status"] == "observed" else item["message"]
+            )
+            suggestion = IMPROVEMENT_TIPS.get(item["criterion"])
+            if borderline:
+                message = "Số đo nằm rất sát ranh giới nên AI chưa xem đây là lỗi rõ ràng."
+                suggestion = "Chưa cần đổi kỹ thuật chỉ dựa vào clip này; hãy kiểm tra lại ở góc quay rõ hơn."
+            phase = CRITERION_PHASES.get(item["criterion"])
+            moment = _criterion_evidence(item["criterion"], stroke, fps)
             target.append({
                 "criterion": item["criterion"],
                 "label": OBSERVABLE_LABELS.get(item["criterion"], item["label"]),
-                "message": OBSERVABLE_MESSAGES.get(
-                    item["criterion"], item["message"]
-                ),
+                "message": message,
                 "value": _display_observable_value(item),
+                "measurement": _add_measurement_context(
+                    measurement,
+                    phase=phase,
+                    moment=moment,
+                    reliability=(
+                        "Sát ngưỡng — chỉ tham khảo" if borderline
+                        else "Quan sát theo pose 2D"
+                    ),
+                ),
                 "evidence": "visual_heuristic",
-                "moment": _criterion_evidence(item["criterion"], stroke, fps),
+                "moment": moment,
                 **(
                     {
-                        "suggestion": IMPROVEMENT_TIPS.get(item["criterion"]),
+                        "suggestion": suggestion,
                         "drill": PRACTICE_DRILLS.get(item["criterion"], []),
                     }
                     if item["status"] == "needs_review" else {}
@@ -305,26 +541,50 @@ def build_user_report(analysis: dict) -> dict:
         quality_message = "Video đủ chất lượng để phân tích hình học."
     else:
         quality_message = "Video chưa đủ chất lượng; hãy quay lại theo hướng dẫn."
+    actionable_review = [
+        item for item in needs_review
+        if not (item.get("measurement") or {}).get("borderline", False)
+    ]
     if not quality.get("geometry_feasible"):
         summary = "Video này chưa đủ rõ để AI đưa ra hướng dẫn kỹ thuật đáng tin cậy."
-    elif needs_review:
+    elif actionable_review:
         summary = (
             "Trong lần tập tiếp theo, hãy tập trung vào một việc: "
-            f"{needs_review[0]['suggestion']}"
+            f"{actionable_review[0]['suggestion']}"
         )
     elif observed:
-        summary = "Không phát hiện điểm cần ưu tiên sửa từ góc quay này."
+        summary = "Không phát hiện lỗi rõ ràng; hãy duy trì điểm đang làm tốt ở mục bên dưới."
     else:
         summary = "AI chưa có đủ bằng chứng để đưa ra hướng dẫn kỹ thuật."
     primary_focus = None
-    if needs_review:
+    if actionable_review:
         primary_focus = {
-            "label": needs_review[0]["label"],
-            "observation": needs_review[0]["message"],
-            "action": needs_review[0].get("suggestion"),
-            "moment": needs_review[0].get("moment"),
-            "drill": needs_review[0].get("drill", []),
+            "mode": "improve",
+            "label": actionable_review[0]["label"],
+            "observation": actionable_review[0]["message"],
+            "action": actionable_review[0].get("suggestion"),
+            "moment": actionable_review[0].get("moment"),
+            "drill": actionable_review[0].get("drill", []),
+            "measurement": actionable_review[0].get("measurement"),
         }
+    elif quality.get("geometry_feasible"):
+        primary_focus = _maintenance_focus(observed)
+    all_assessed = observed + needs_review
+    assessment_coverage = {
+        "total": len(all_assessed) + len(measurements) + len(unavailable),
+        "observed": len(observed),
+        "needs_review": len(needs_review),
+        "reference_only": len(measurements),
+        "not_assessed": len(unavailable),
+        "numeric": sum(
+            (item.get("measurement") or {}).get("kind") == "quantitative"
+            for item in all_assessed
+        ),
+        "sequence": sum(
+            (item.get("measurement") or {}).get("kind") == "sequence"
+            for item in all_assessed
+        ),
+    }
     view_check = analysis.get("camera_view_check") or {}
     detected_view = view_check.get("detected_body_projection")
     selected_view = analysis["selection"]["view"]
@@ -337,7 +597,7 @@ def build_user_report(analysis: dict) -> dict:
         else None
     )
     return {
-        "version": 4,
+        "version": 5,
         "title": f"Kết quả phân tích {TECHNIQUE_LABELS[analysis['selection']['technique']]}",
         "status": {
             "code": analysis["overall"],
@@ -381,9 +641,11 @@ def build_user_report(analysis: dict) -> dict:
         },
         "summary": summary,
         "primary_focus": primary_focus,
+        "assessment_coverage": assessment_coverage,
+        "phase_timeline": _phase_timeline(strokes, float(fps or 0)),
         "measurement_note": (
-            "Các số đo chuyên môn được giữ trong báo cáo kỹ thuật; phần này chỉ "
-            "trình bày những điều người chơi có thể áp dụng."
+            "Số đo được tính từ pose 2D và so với ranh giới của rule tương ứng; "
+            "chỉ dùng để định hướng tập luyện, không phải chuẩn y khoa."
         ),
         "observed_signals": observed,
         "needs_review": needs_review,
@@ -429,6 +691,15 @@ def render_user_report_markdown(report: dict) -> str:
                 details.append(str(item["phase"]))
             suffix = f" ({'; '.join(details)})" if details else ""
             lines.append(f"- **{item['label']}**{suffix}: {item[message_key]}")
+            measurement = item.get("measurement")
+            if measurement:
+                details = [
+                    f"hiện tại {measurement['current']}",
+                    f"mục tiêu {measurement['target']}",
+                ]
+                if measurement.get("gap"):
+                    details.append(measurement["gap"].lower())
+                lines.append(f"  Số đo: {'; '.join(details)}.")
             if item.get("suggestion") and message_key != "suggestion":
                 lines.append(f"  Cách cải thiện: {item['suggestion']}")
         lines.append("")
@@ -644,6 +915,14 @@ def main() -> None:
             "--target", args.target,
         ], cwd=repo_root)
 
+    viewer_data = output_dir / "pose_viewer.json"
+    run_command([
+        sys.executable,
+        str(repo_root / "scripts/inference/export_pose_viewer.py"),
+        str(pose),
+        str(viewer_data),
+    ], cwd=repo_root)
+
     quality_path = output_dir / "quality.json"
     run_command([
         sys.executable,
@@ -655,17 +934,11 @@ def main() -> None:
     quality = json.loads(quality_path.read_text(encoding="utf-8"))
 
     preview = None
-    skeleton_preview = None
     if not args.no_preview:
         preview = output_dir / "pose_preview.mp4"
         run_command([
             sys.executable, str(repo_root / "scripts/inference/render_pose.py"),
             str(video), str(pose), str(preview),
-        ], cwd=repo_root)
-        skeleton_preview = output_dir / "skeleton_preview.mp4"
-        run_command([
-            sys.executable, str(repo_root / "scripts/inference/render_pose.py"),
-            str(video), str(pose), str(skeleton_preview), "--skeleton-only",
         ], cwd=repo_root)
 
     classifier_suggestion = None
@@ -739,9 +1012,7 @@ def main() -> None:
     analysis["artifacts"]["classification"] = (
         str(classifier_path) if classifier_suggestion is not None else None
     )
-    analysis["artifacts"]["skeleton_preview"] = (
-        str(skeleton_preview) if skeleton_preview else None
-    )
+    analysis["artifacts"]["pose_viewer"] = str(viewer_data)
     user_report = build_user_report(analysis)
     user_report_json_path = output_dir / "user_report.json"
     user_report_markdown_path = output_dir / "user_report.md"

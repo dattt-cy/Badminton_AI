@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from ai_classifier.pose.visualization import render_pose_video, render_skeleton_video
+from ai_classifier.pose.visualization import render_pose_video
 
 
 def parse_args() -> argparse.Namespace:
@@ -19,11 +19,6 @@ def parse_args() -> argparse.Namespace:
         default=0.5,
         help="Minimum keypoint confidence to draw (default: 0.5)",
     )
-    parser.add_argument(
-        "--skeleton-only",
-        action="store_true",
-        help="Draw the skeleton on a black background instead of the source video",
-    )
     return parser.parse_args()
 
 
@@ -31,8 +26,7 @@ def main() -> None:
     args = parse_args()
     if not 0.0 <= args.confidence <= 1.0:
         raise SystemExit("--confidence must be between 0 and 1")
-    renderer = render_skeleton_video if args.skeleton_only else render_pose_video
-    frame_count = renderer(
+    frame_count = render_pose_video(
         args.video,
         args.pose,
         args.output,
