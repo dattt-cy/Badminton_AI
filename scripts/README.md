@@ -23,6 +23,12 @@ The output directory stores the dense HIT scan, event-level results,
 event-frame-aware trajectory caches, and the resumable `timeline.json`. Re-run
 the same command to continue incomplete work. Use `--force-scan` or
 `--force-events` only when the corresponding cached stage must be rebuilt.
+Candidate generation and duplicate suppression can be evaluated without
+rescanning the video via `--candidate-hit-threshold`,
+`--candidate-nms-radius`, `--selector-threshold`, and
+`--cross-side-nms-radius`. Keep the serialized selector defaults for reported
+test results unless an operating point was chosen on a separate validation
+match.
 
 ## Data workflows
 

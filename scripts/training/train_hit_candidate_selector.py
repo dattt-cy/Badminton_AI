@@ -17,6 +17,23 @@ from ai_classifier.localization import HitEvent, temporal_nms
 FEATURES = ["hit_score", "local_contrast", "previous_gap", "next_gap", "side_upper"]
 
 
+def select_f1_threshold(labels: np.ndarray, probabilities: np.ndarray) -> dict[str, float]:
+    """Calibrate on out-of-fold probabilities, preferring recall on F1 ties."""
+    candidates = np.unique(np.concatenate((np.linspace(0.05, 0.95, 181), probabilities)))
+    rows = []
+    for threshold in candidates:
+        predictions = probabilities >= threshold
+        true_positive = int(np.sum((predictions == 1) & (labels == 1)))
+        false_positive = int(np.sum((predictions == 1) & (labels == 0)))
+        false_negative = int(np.sum((predictions == 0) & (labels == 1)))
+        precision = true_positive / max(true_positive + false_positive, 1)
+        recall = true_positive / max(true_positive + false_negative, 1)
+        f1 = 2.0 * precision * recall / max(precision + recall, 1e-12)
+        rows.append((f1, recall, precision, -abs(float(threshold) - 0.5), float(threshold)))
+    f1, recall, precision, _distance, threshold = max(rows)
+    return {"threshold": threshold, "f1": f1, "precision": precision, "recall": recall}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=Path("data/manifests/shuttleset_rgb.csv"))
@@ -82,6 +99,7 @@ def main() -> None:
     y = np.asarray(labels, dtype=np.int64)
     model = LogisticRegression(class_weight="balanced", max_iter=2000, random_state=20260920)
     cross_validation = []
+    out_of_fold_probabilities = np.zeros(len(y), dtype=np.float64)
     group_array = np.asarray(groups)
     for held_out in sorted(set(groups), key=int):
         train_mask = group_array != held_out
@@ -89,6 +107,7 @@ def main() -> None:
         fold = LogisticRegression(class_weight="balanced", max_iter=2000, random_state=20260920)
         fold.fit(x[train_mask], y[train_mask])
         fold_probabilities = fold.predict_proba(x[test_mask])[:, 1]
+        out_of_fold_probabilities[test_mask] = fold_probabilities
         fold_predictions = fold_probabilities >= 0.5
         cross_validation.append({
             "held_out_match": held_out,
@@ -98,14 +117,16 @@ def main() -> None:
             "f1": float(f1_score(y[test_mask], fold_predictions)),
         })
     model.fit(x, y)
+    calibration = select_f1_threshold(y, out_of_fold_probabilities)
     probabilities = model.predict_proba(x)[:, 1]
-    predictions = probabilities >= 0.5
+    predictions = probabilities >= calibration["threshold"]
     result = {
         "model": "logistic_regression",
         "features": FEATURES,
         "coefficient": model.coef_[0].tolist(),
         "intercept": float(model.intercept_[0]),
-        "threshold": 0.5,
+        "threshold": calibration["threshold"],
+        "out_of_fold_calibration": calibration,
         "training_candidates": len(y),
         "training_positives": int(y.sum()),
         "matches": sorted(set(groups), key=int),

@@ -65,6 +65,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hit-stride", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--selector-threshold", type=float)
+    parser.add_argument(
+        "--candidate-hit-threshold", type=float,
+        help="Override the selector's candidate HIT threshold for controlled sweeps.",
+    )
+    parser.add_argument(
+        "--candidate-nms-radius", type=int,
+        help="Override the selector's side-aware candidate NMS radius.",
+    )
+    parser.add_argument(
+        "--cross-side-nms-radius", type=int, default=0,
+        help="Optional final NMS radius across both players; zero disables it.",
+    )
     parser.add_argument("--max-events", type=int, help="Debug/smoke-test limit after selection.")
     parser.add_argument("--force-scan", action="store_true")
     parser.add_argument("--force-events", action="store_true")
@@ -109,12 +121,21 @@ def selector_probability(features: list[float], selector: dict[str, object]) -> 
 
 def select_hit_events(
     raw_events: list[HitEvent], selector: dict[str, object], threshold: float,
+    *, candidate_hit_threshold: float | None = None,
+    candidate_nms_radius: int | None = None,
+    cross_side_nms_radius: int = 0,
 ) -> tuple[list[HitEvent], list[dict[str, object]]]:
     generation = selector["candidate_generation"]
     candidates = temporal_nms(
         raw_events,
-        threshold=float(generation["hit_threshold"]),
-        radius=int(generation["nms_radius"]),
+        threshold=float(
+            generation["hit_threshold"]
+            if candidate_hit_threshold is None else candidate_hit_threshold
+        ),
+        radius=int(
+            generation["nms_radius"]
+            if candidate_nms_radius is None else candidate_nms_radius
+        ),
         side_aware=bool(generation.get("side_aware", True)),
     )
     scored = []
@@ -128,6 +149,20 @@ def select_hit_events(
         scored.append(row)
         if probability >= threshold:
             selected.append(event)
+    if cross_side_nms_radius > 0:
+        probabilities = {
+            (int(row["frame"]), str(row["side"])): float(row["selector_probability"])
+            for row in scored
+        }
+        kept: list[HitEvent] = []
+        for event in sorted(
+            selected,
+            key=lambda item: probabilities[(item.frame, item.side)],
+            reverse=True,
+        ):
+            if all(abs(event.frame - previous.frame) > cross_side_nms_radius for previous in kept):
+                kept.append(event)
+        selected = sorted(kept, key=lambda item: item.frame)
     return selected, scored
 
 
@@ -190,7 +225,12 @@ def main() -> None:
         }
         write_json(scan_path, scan_payload)
     raw_events = [HitEvent(**item) for item in scan_payload["raw_events"]]
-    selected, scored = select_hit_events(raw_events, selector, selector_threshold)
+    selected, scored = select_hit_events(
+        raw_events, selector, selector_threshold,
+        candidate_hit_threshold=args.candidate_hit_threshold,
+        candidate_nms_radius=args.candidate_nms_radius,
+        cross_side_nms_radius=args.cross_side_nms_radius,
+    )
 
     if args.gate_json:
         gate = json.loads(args.gate_json.read_text(encoding="utf-8"))
@@ -291,6 +331,9 @@ def main() -> None:
                 "pose": file_identity(args.pose_model),
             },
             "selector_threshold": selector_threshold,
+            "candidate_hit_threshold": args.candidate_hit_threshold,
+            "candidate_nms_radius": args.candidate_nms_radius,
+            "cross_side_nms_radius": args.cross_side_nms_radius,
             "candidate_count": len(scored),
             "selected_event_count": len(selected),
             "completed_event_count": len(completed),

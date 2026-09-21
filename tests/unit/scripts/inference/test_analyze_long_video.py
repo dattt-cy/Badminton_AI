@@ -37,5 +37,20 @@ def test_select_hit_events_keeps_all_candidates_above_selector_threshold():
     assert len(scored) == 3
 
 
+def test_cross_side_nms_keeps_higher_selector_probability():
+    events = [
+        HitEvent(frame=10, side="upper", score=0.9),
+        HitEvent(frame=12, side="lower", score=0.6),
+        HitEvent(frame=40, side="lower", score=0.8),
+    ]
+    selected, _ = select_hit_events(
+        events, selector(), 0.0,
+        candidate_hit_threshold=0.1,
+        candidate_nms_radius=0,
+        cross_side_nms_radius=8,
+    )
+    assert [event.frame for event in selected] == [10, 40]
+
+
 def test_stable_digest_is_order_independent_for_mappings():
     assert stable_digest({"a": 1, "b": 2}) == stable_digest({"b": 2, "a": 1})
