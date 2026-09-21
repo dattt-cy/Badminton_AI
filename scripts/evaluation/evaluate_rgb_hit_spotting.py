@@ -136,7 +136,7 @@ def parse_args() -> argparse.Namespace:
                         default=Path("data/manifests/shuttleset_rgb.csv"))
     parser.add_argument("--checkpoint", type=Path,
                         default=Path("work_dirs/r2plus1d18_hit_full/best.pth"))
-    parser.add_argument("--split", choices=("val", "test"), default="val")
+    parser.add_argument("--split", choices=("train", "val", "test"), default="val")
     parser.add_argument("--match-ids", nargs="*",
                         help="Optional subset of match IDs to evaluate.")
     parser.add_argument("--output", type=Path, required=True,

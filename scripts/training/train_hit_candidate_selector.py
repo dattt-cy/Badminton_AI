@@ -39,17 +39,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, default=Path("data/manifests/shuttleset_rgb.csv"))
     parser.add_argument("--raw-cache-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--split", choices=("train", "val"), default="val")
+    parser.add_argument("--match-ids", nargs="*", help="Optional subset within the selected split.")
     parser.add_argument("--threshold", type=float, default=0.3)
     parser.add_argument("--nms-radius", type=int, default=8)
     parser.add_argument("--tolerance", type=int, default=5)
     return parser.parse_args()
 
 
-def truth_by_match(path: Path) -> dict[str, list[tuple[int, str]]]:
+def truth_by_match(path: Path, split: str) -> dict[str, list[tuple[int, str]]]:
     output: dict[str, list[tuple[int, str]]] = {}
     with path.open(encoding="utf-8-sig", newline="") as handle:
         for row in csv.DictReader(handle):
-            if row["split"] != "val":
+            if row["split"] != split:
                 continue
             side = "upper" if row["player_side"] == "top" else "lower"
             output.setdefault(row["match_id"], []).append((int(row["hit_frame"]), side))
@@ -75,7 +77,13 @@ def candidate_features(candidates: list[HitEvent], index: int) -> list[float]:
 
 def main() -> None:
     args = parse_args()
-    truth = truth_by_match(args.manifest)
+    truth = truth_by_match(args.manifest, args.split)
+    if args.match_ids:
+        requested = set(args.match_ids)
+        missing = requested - set(truth)
+        if missing:
+            raise ValueError(f"Matches not found in split={args.split}: {sorted(missing)}")
+        truth = {match_id: truth[match_id] for match_id in requested}
     rows = []
     groups = []
     labels = []
