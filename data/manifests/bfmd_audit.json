@@ -1,0 +1,87 @@
+{
+  "dataset": "BFMD",
+  "total_matches": 12,
+  "total_shots": 9872,
+  "raw_counts": {
+    "serve": 833,
+    "smash": 1354,
+    "net_shot": 2875,
+    "drive": 868,
+    "press": 155,
+    "lift": 2098,
+    "net_kill": 93,
+    "flick_serve": 85,
+    "clear": 606,
+    "drop": 905
+  },
+  "coarse_counts": {
+    "serve": 918,
+    "smash": 1354,
+    "net_shot": 2875,
+    "drive": 868,
+    "net_attack": 248,
+    "lift": 2098,
+    "clear": 606,
+    "drop": 905
+  },
+  "split_totals": {
+    "test": 1617,
+    "train": 6175,
+    "val": 2080
+  },
+  "split_class_counts": {
+    "train": {
+      "serve": 535,
+      "lift": 1349,
+      "net_shot": 1768,
+      "net_attack": 138,
+      "drop": 610,
+      "smash": 812,
+      "drive": 491,
+      "clear": 472
+    },
+    "val": {
+      "serve": 209,
+      "net_shot": 634,
+      "lift": 445,
+      "smash": 291,
+      "drive": 191,
+      "clear": 78,
+      "net_attack": 55,
+      "drop": 177
+    },
+    "test": {
+      "serve": 174,
+      "smash": 251,
+      "net_shot": 473,
+      "drive": 186,
+      "net_attack": 55,
+      "lift": 304,
+      "clear": 56,
+      "drop": 118
+    }
+  },
+  "split_by_match": {
+    "KAPAL-API-Indonesia-Open-2025-Anders-Antonsen-DEN-3-vs.-Chou-Tien-Chen-TPE-6-F": "test",
+    "KAPAL-API-Indonesia-Open-2025-Chou-Tien-Chen-TPE-6-vs.-Kunlavut-Vitidsarn-THA-2-SF": "train",
+    "PETRONAS-Malaysia-Open-2025-Kodai-Naraok-JPN-8-vs.-Anders-Antonsen-DEN-2-SF": "train",
+    "PETRONAS-Malaysia-Open-2025-Shi-Yu-Qi-CHN-1-vs.-Li-Shi-Feng-CHN-7-SF": "train",
+    "VICTOR-China-Open-2025-Chou-Tien-Chen-TPE-6-vs.-Shi-Yu-Qi-CHN-3-SF": "train",
+    "VICTOR-China-Open-2025-Shi-Yu-Qi-CHN-3-vs.-Wang-Zheng-Xing-CHN-F": "train",
+    "YONEX-All-England-Open-2025-Lee-Chia-Hao-TPE-vs.-Alex-Lanier-FRA-SF": "test",
+    "YONEX-All-England-Open-2025-Shi-Yu-Qi-CHN-1-vs.-Li-Shi-Feng-CHN-6-SF": "val",
+    "KAPAL-API-Indonesia-Open-2025-Shi-Yu-Qi-CHN-1-vs.-Anders-Antonsen-DEN-3-SF": "val",
+    "VICTOR-China-Open-2025-Wang-Zheng-Xing-CHN-vs.-Anders-Antonsen-DEN-2-SF": "train",
+    "PETRONAS-Malaysia-Open-2025-Shi-Yu-Qi-CHN-1-vs.-Anders-Antonsen-DEN-2-F": "train",
+    "YONEX-All-England-Open-2025-Shi-Yu-Qi-CHN-1-vs.-Lee-Chia-Hao-TPE-F": "train"
+  },
+  "excluded_counts": {
+    "push": 510,
+    "block": 919
+  },
+  "excluded_reasons": {
+    "block": "ambiguous_defensive_response",
+    "push": "taxonomy_mismatch_requires_manual_court_depth_audit"
+  },
+  "mapping_policy": "conservative_v2"
+}
