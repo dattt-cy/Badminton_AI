@@ -122,3 +122,16 @@ HIT model -> learned selector -> motion tracking/crop -> FastTrackNet
   different hit frame.
 - Evaluation reports now record model paths, pipeline stages, raw predictions,
   and physics adjustments so future slide metrics can be audited precisely.
+
+## Long-video pipeline consolidation on 21/09/2026
+
+- `scripts/inference/analyze_long_video.py` is the single maintained timeline
+  runner: HIT -> temporal RF selector -> FastTrackNet -> fusion -> physics.
+- Removed the superseded RGB-only archive comparison, legacy hit-event runner,
+  detector comparison, drive diagnostic, conservative audit helper, and five
+  one-off pilot/fine-tuning PowerShell recipes.
+- Removed the unit test that existed only for the retired candidate-quality
+  heuristic. Current selector, long-video, fusion, and localization tests remain.
+- Checkpoints, manifests, hard-example caches, and benchmark reports were not
+  deleted; they remain evidence and reproducibility inputs rather than code
+  paths.
