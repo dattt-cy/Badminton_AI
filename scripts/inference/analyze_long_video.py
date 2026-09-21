@@ -79,6 +79,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-events", type=int, help="Debug/smoke-test limit after selection.")
     parser.add_argument("--force-scan", action="store_true")
     parser.add_argument("--force-events", action="store_true")
+    parser.add_argument(
+        "--event-offsets", type=int, nargs="+", default=[0],
+        help="Classify at these frame offsets and average probabilities (for example -4 0 4).",
+    )
     return parser.parse_args()
 
 
@@ -171,6 +175,49 @@ def write_json(path: Path, payload: object) -> None:
     temporary.replace(path)
 
 
+def average_rankings(results: list[dict], key: str) -> list[dict[str, object]]:
+    labels = [item["label"] for item in results[0][key]]
+    means = {
+        label: sum(
+            next(float(item["probability"]) for item in result[key] if item["label"] == label)
+            for result in results
+        ) / len(results)
+        for label in labels
+    }
+    return [
+        {"label": label, "probability": probability}
+        for label, probability in sorted(means.items(), key=lambda item: item[1], reverse=True)
+    ]
+
+
+def classify_offsets(
+    *, offsets: list[int], event_frame: int, total_frames: int, classify,
+) -> dict:
+    unique_offsets = sorted(set(offsets))
+    results = []
+    used_offsets = []
+    for offset in unique_offsets:
+        shifted = max(0, min(total_frames - 1, event_frame + offset))
+        results.append(classify(shifted))
+        used_offsets.append(shifted - event_frame)
+    combined = dict(results[used_offsets.index(0)] if 0 in used_offsets else results[0])
+    combined["stroke_ranking"] = average_rankings(results, "stroke_ranking")
+    combined["stroke_side_ranking"] = average_rankings(results, "stroke_side_ranking")
+    combined["stroke"] = combined["stroke_ranking"][0]
+    combined["stroke_side"] = combined["stroke_side_ranking"][0]
+    combined["event_offsets"] = used_offsets
+    combined["offset_predictions"] = [
+        {
+            "offset": offset,
+            "stroke": result["stroke"],
+            "stroke_side": result["stroke_side"],
+            "physics_adjustment": result["physics_adjustment"],
+        }
+        for offset, result in zip(used_offsets, results)
+    ]
+    return combined
+
+
 def main() -> None:
     args = parse_args()
     started = time.perf_counter()
@@ -253,6 +300,7 @@ def main() -> None:
         "tracknet": file_identity(args.tracknet_model),
         "rgb": file_identity(args.rgb_checkpoint),
         "fusion": file_identity(args.fusion_checkpoint),
+        "event_offsets": sorted(set(args.event_offsets)),
     })
     completed = []
     for index, event in enumerate(selected, 1):
@@ -271,12 +319,16 @@ def main() -> None:
                     args.video, center_frame=event.frame, window_before=32, window_after=32
                 )
                 trajectory.to_csv(trajectory_path, index=False)
-            result = classify_fusion_event(
-                video=args.video, trajectory=trajectory, event_frame=event.frame,
-                player_side=event.side, corners=corners, pose_model=pose_model,
-                rgb_model=rgb_model, fusion_model=fusion_model,
-                rgb_checkpoint=rgb_checkpoint, fusion_checkpoint=fusion_checkpoint,
-                device=device,
+            result = classify_offsets(
+                offsets=args.event_offsets, event_frame=event.frame,
+                total_frames=int(meta["frames"]),
+                classify=lambda shifted_frame: classify_fusion_event(
+                    video=args.video, trajectory=trajectory, event_frame=shifted_frame,
+                    player_side=event.side, corners=corners, pose_model=pose_model,
+                    rgb_model=rgb_model, fusion_model=fusion_model,
+                    rgb_checkpoint=rgb_checkpoint, fusion_checkpoint=fusion_checkpoint,
+                    device=device,
+                ),
             )
             probability = next(
                 row["selector_probability"] for row in scored
@@ -294,6 +346,8 @@ def main() -> None:
                 "raw_stroke": result["raw_stroke"],
                 "raw_stroke_side": result["raw_stroke_side"],
                 "physics_adjustment": result["physics_adjustment"],
+                "event_offsets": result["event_offsets"],
+                "offset_predictions": result["offset_predictions"],
                 "pose_two_player_valid_ratio": result["pose_two_player_valid_ratio"],
                 "structured_quality": result["structured_quality"],
                 "clip_range": result["clip_range"],
@@ -325,6 +379,7 @@ def main() -> None:
             "candidate_hit_threshold": args.candidate_hit_threshold,
             "candidate_nms_radius": args.candidate_nms_radius,
             "cross_side_nms_radius": args.cross_side_nms_radius,
+            "event_offsets": sorted(set(args.event_offsets)),
             "candidate_count": len(scored),
             "selected_event_count": len(selected),
             "completed_event_count": len(completed),
