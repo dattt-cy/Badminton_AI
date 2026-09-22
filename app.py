@@ -21,6 +21,8 @@ CORS(app)
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_CHECKPOINT = REPO_ROOT / "work_dirs" / "r2plus1d18_mixed_shuttleset_finebadminton" / "best.pth"
+MATCH39_EVAL_FILE = REPO_ROOT / "work_dirs" / "match39_verified_eval.json"
+MATCH39_VIDEO_FILE = REPO_ROOT / "work_dirs" / "test_match39_10m_15m.mp4"
 MATCH40_EVAL_FILE = REPO_ROOT / "work_dirs" / "match40_verified_eval.json"
 MATCH40_VIDEO_FILE = REPO_ROOT / "work_dirs" / "test_match40_10m_15m.mp4"
 
@@ -110,15 +112,13 @@ def status():
     })
 
 
-@app.route("/api/match40")
-def get_match40_data():
-    if not MATCH40_EVAL_FILE.exists():
-        return jsonify({"error": "Evaluation file not found"}), 404
+def _get_match_response(match_name, video_file, eval_file):
+    if not eval_file.exists():
+        return jsonify({"error": f"Evaluation file not found: {eval_file.name}"}), 404
     
-    with open(MATCH40_EVAL_FILE, "r", encoding="utf-8") as f:
+    with open(eval_file, "r", encoding="utf-8") as f:
         events = json.load(f)
     
-    # Calculate stats
     total = len(events)
     matched_gt = sum(1 for e in events if e.get("is_hit_matched"))
     correct_stroke = sum(1 for e in events if e.get("ok_stroke") is True)
@@ -126,8 +126,8 @@ def get_match40_data():
     correct_joint = sum(1 for e in events if e.get("ok_joint") is True)
     
     return jsonify({
-        "match": "Match 40 (10:00 - 15:00, 5 Phút)",
-        "video_path": str(MATCH40_VIDEO_FILE),
+        "match": match_name,
+        "video_path": str(video_file),
         "summary": {
             "total_detected_hits": total,
             "matched_ground_truth_hits": matched_gt,
@@ -140,6 +140,16 @@ def get_match40_data():
         },
         "events": events
     })
+
+
+@app.route("/api/match39")
+def get_match39_data():
+    return _get_match_response("Match 39 (10:00 - 15:00, 5 Phút)", MATCH39_VIDEO_FILE, MATCH39_EVAL_FILE)
+
+
+@app.route("/api/match40")
+def get_match40_data():
+    return _get_match_response("Match 40 (10:00 - 15:00, 5 Phút)", MATCH40_VIDEO_FILE, MATCH40_EVAL_FILE)
 
 
 @app.route("/api/stream_video")
@@ -190,30 +200,12 @@ def analyze_clip():
                 return jsonify(PRECOMPUTED_DEMOS[fname])
         return jsonify({"error": f"Video file not found or invalid: {video_path}"}), 400
         
-    filename = video_path.name
-    # Fast path if it's one of the known demo clips
-    if filename in PRECOMPUTED_DEMOS:
-        res = dict(PRECOMPUTED_DEMOS[filename])
-        res["video"] = str(video_path)
-        return jsonify(res)
-
-    # Otherwise run actual inference script
     # Run genuine inference script
     out_json = REPO_ROOT / "work_dirs" / f"web_infer_{video_path.stem}.json"
-    player_side = request.form.get("player_side", "auto") if "file" in request.files else request.get_json().get("player_side", "auto")
     is_file_req = "file" in request.files
     player_side = request.form.get("player_side", "top") if is_file_req else request.get_json().get("player_side", "top")
     pipeline_mode = request.form.get("pipeline_mode", "fusion") if is_file_req else request.get_json().get("pipeline_mode", "fusion")
     
-    cmd = [
-        sys.executable,
-        str(REPO_ROOT / "scripts" / "inference" / "classify_shuttleset_rgb_multitask.py"),
-        str(video_path),
-        "--checkpoint", str(DEFAULT_CHECKPOINT),
-        "--crop-hitter",
-        "--player-side", player_side,
-        "--output", str(out_json)
-    ]
     if pipeline_mode == "fusion":
         cmd = [
             sys.executable,
@@ -234,7 +226,6 @@ def analyze_clip():
         ]
     
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
         if proc.returncode != 0:
             return jsonify({"error": f"Inference failed: {proc.stderr[-500:]}"}), 500
