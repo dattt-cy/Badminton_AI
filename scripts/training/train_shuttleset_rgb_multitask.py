@@ -98,6 +98,7 @@ def parse_args() -> argparse.Namespace:
         help="Multiply loss weights for selected stroke classes, e.g. drive=1.8 net_attack=1.6.",
     )
     parser.add_argument("--freeze-backbone", action="store_true")
+    parser.add_argument("--freeze-side-head", action="store_true")
     parser.add_argument(
         "--unfreeze-layer4", action="store_true",
         help="Freeze the backbone except layer4; intended for crop/domain adaptation.",
@@ -119,6 +120,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fine-samples-per-class", type=int)
     parser.add_argument("--fine-val-samples-per-class", type=int)
     parser.add_argument("--fine-cache-dir", type=Path)
+    parser.add_argument("--bfmd-train-manifest", type=Path)
+    parser.add_argument("--bfmd-val-manifest", type=Path)
+    parser.add_argument("--bfmd-cache-dir", type=Path)
+    parser.add_argument("--bfmd-samples-per-class", type=int)
+    parser.add_argument("--bfmd-val-samples-per-class", type=int)
+    parser.add_argument("--bfmd-stroke-loss-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--source-class-balanced-sampler", action="store_true",
+        help="Sample every source x stroke-class group with equal probability.",
+    )
     parser.add_argument("--amp", action="store_true")
     parser.add_argument("--seed", type=int, default=20260916)
     parser.add_argument(
@@ -406,6 +417,24 @@ class FineJointDataset(Dataset):
         return tensor, self.stroke_to_id[record.coarse_label], -100, f"fine:{record.sample_id}"
 
 
+class CachedStrokeOnlyDataset(Dataset):
+    def __init__(self, records, cache_dir: Path, frame_count: int, training: bool, prefix: str):
+        self.records, self.cache_dir, self.training, self.prefix = records, cache_dir, training, prefix
+        self.folder = cache_dir / f"frames_{frame_count}"
+        self.stroke_to_id = {name: index for index, name in enumerate(STROKE_CLASSES)}
+
+    def __len__(self): return len(self.records)
+
+    def __getitem__(self, index):
+        record = self.records[index]
+        tensor = torch.from_numpy(np.load(self.folder / f"{record.sample_id}.npy")).float().div_(255.0)
+        mean = tensor.new_tensor([0.43216, 0.394666, 0.37645]).view(1, 3, 1, 1)
+        std = tensor.new_tensor([0.22803, 0.22145, 0.216989]).view(1, 3, 1, 1)
+        tensor = ((tensor - mean) / std).permute(1, 0, 2, 3)
+        if self.training and torch.rand(()) < 0.5: tensor = torch.flip(tensor, dims=(-1,))
+        return tensor, self.stroke_to_id[record.coarse_label], -100, f"{self.prefix}:{record.sample_id}"
+
+
 def balanced_fine_subset(records, count: int | None, seed: int):
     if count is None:
         return records
@@ -469,15 +498,18 @@ def source_weighted_stroke_loss(
     *,
     fine_weight: float,
     shuttle_weight: float,
+    bfmd_weight: float = 1.0,
     zero_weight_sample_ids: set[str] | None = None,
 ) -> torch.Tensor:
     """Apply absolute per-source weights without cancelling homogeneous batches."""
-    if fine_weight < 0 or shuttle_weight < 0:
+    if fine_weight < 0 or shuttle_weight < 0 or bfmd_weight < 0:
         raise ValueError("Source loss weights must be non-negative")
     zero_weight_sample_ids = zero_weight_sample_ids or set()
     weights = losses.new_tensor([
         0.0 if str(sample_id) in zero_weight_sample_ids else (
-            fine_weight if str(sample_id).startswith("fine:") else shuttle_weight
+            fine_weight if str(sample_id).startswith("fine:") else (
+                bfmd_weight if str(sample_id).startswith("bfmd:") else shuttle_weight
+            )
         )
         for sample_id in sample_ids
     ])
@@ -494,6 +526,7 @@ def run_epoch(
     side_loss_weight: float,
     fine_stroke_loss_weight: float,
     shuttle_stroke_loss_weight: float,
+    bfmd_stroke_loss_weight: float,
     zero_stroke_sample_ids: set[str],
     optimizer: torch.optim.Optimizer | None,
     scaler: torch.amp.GradScaler,
@@ -501,6 +534,10 @@ def run_epoch(
 ) -> tuple[float, torch.Tensor, torch.Tensor]:
     training = optimizer is not None
     model.train(training)
+    # requires_grad=False does not freeze BatchNorm running statistics. Keep a
+    # fully frozen backbone in eval mode during head-only fine-tuning.
+    if training and not any(parameter.requires_grad for parameter in model.backbone.parameters()):
+        model.backbone.eval()
     stroke_confusion = torch.zeros(len(STROKE_CLASSES), len(STROKE_CLASSES), dtype=torch.int64)
     side_confusion = torch.zeros(len(SIDE_CLASSES), len(SIDE_CLASSES), dtype=torch.int64)
     total_loss = 0.0
@@ -521,6 +558,7 @@ def run_epoch(
                     sample_ids,
                     fine_weight=fine_stroke_loss_weight,
                     shuttle_weight=shuttle_stroke_loss_weight,
+                    bfmd_weight=bfmd_stroke_loss_weight,
                     zero_weight_sample_ids=zero_stroke_sample_ids,
                 )
                 side_mask = side_labels != -100
@@ -575,6 +613,8 @@ def main() -> None:
     )
     fine_train_records = []
     fine_val_records = []
+    bfmd_train_records = []
+    bfmd_val_records = []
     if args.fine_dataset_root is not None:
         fine_train_records = balanced_fine_subset(
             load_fine_badminton_manifest(args.fine_train_manifest),
@@ -592,9 +632,23 @@ def main() -> None:
             fine_val_records, args.fine_dataset_root, args.frames, False, args.fine_cache_dir,
             args.crop_size,
         )
-        train_dataset = ConcatDataset([shuttle_train_dataset, fine_train_dataset])
-        val_dataset = ConcatDataset([shuttle_val_dataset, fine_val_dataset])
-        # Draw both sources equally even when their selected subset sizes differ.
+        train_sources = [shuttle_train_dataset, fine_train_dataset]
+        val_sources = [shuttle_val_dataset, fine_val_dataset]
+        source_weights = [0.5, 0.5]
+        if args.bfmd_train_manifest is not None:
+            bfmd_train_records = balanced_fine_subset(
+                load_records(args.bfmd_train_manifest, "train"), args.bfmd_samples_per_class, args.seed + 2
+            )
+            bfmd_val_records = balanced_fine_subset(
+                load_records(args.bfmd_val_manifest, "val"), args.bfmd_val_samples_per_class, args.seed + 3
+            )
+            bfmd_train_dataset = CachedStrokeOnlyDataset(bfmd_train_records, args.bfmd_cache_dir, args.frames, True, "bfmd")
+            bfmd_val_dataset = CachedStrokeOnlyDataset(bfmd_val_records, args.bfmd_cache_dir, args.frames, False, "bfmd")
+            train_sources.append(bfmd_train_dataset); val_sources.append(bfmd_val_dataset)
+            source_weights = [1/3, 1/3, 1/3]
+        train_dataset = ConcatDataset(train_sources)
+        val_dataset = ConcatDataset(val_sources)
+        # Draw sources equally even when their selected subset sizes differ.
         shuttle_multipliers = []
         for record in train_records:
             multiplier = 1.0
@@ -606,10 +660,24 @@ def main() -> None:
                 multiplier *= args.shuttle_forehand_sample_boost
             shuttle_multipliers.append(multiplier)
         shuttle_total = sum(shuttle_multipliers)
-        train_weights = (
-            [0.5 * value / shuttle_total for value in shuttle_multipliers]
-            + [0.5 / len(fine_train_dataset)] * len(fine_train_dataset)
-        )
+        if args.source_class_balanced_sampler:
+            datasets_and_records = [
+                (shuttle_train_dataset, train_records),
+                (fine_train_dataset, fine_train_records),
+            ] + ([(bfmd_train_dataset, bfmd_train_records)] if len(source_weights) == 3 else [])
+            train_weights = []
+            for source_probability, (dataset, records) in zip(source_weights, datasets_and_records):
+                counts = Counter(record.coarse_label for record in records)
+                train_weights.extend(
+                    source_probability / (len(STROKE_CLASSES) * counts[record.coarse_label])
+                    for record in records
+                )
+        else:
+            train_weights = (
+                [source_weights[0] * value / shuttle_total for value in shuttle_multipliers]
+                + [source_weights[1] / len(fine_train_dataset)] * len(fine_train_dataset)
+                + ([source_weights[2] / len(bfmd_train_dataset)] * len(bfmd_train_dataset) if len(source_weights) == 3 else [])
+            )
         sampler = WeightedRandomSampler(
             train_weights, num_samples=len(train_dataset), replacement=True,
             generator=torch.Generator().manual_seed(args.seed),
@@ -645,12 +713,17 @@ def main() -> None:
             parameter.requires_grad = False
         for parameter in model.backbone.layer4.parameters():
             parameter.requires_grad = True
+    if args.freeze_side_head:
+        for parameter in model.side_head.parameters():
+            parameter.requires_grad = False
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     stroke_weights = class_weights(
         [record for record in train_records if record.sample_id not in train_zero_stroke_ids]
-        + list(fine_train_records), STROKE_CLASSES, "coarse_label"
+        + list(fine_train_records) + list(bfmd_train_records), STROKE_CLASSES, "coarse_label"
     )
+    if args.source_class_balanced_sampler:
+        stroke_weights = torch.ones_like(stroke_weights)
     boosts = {}
     for value in args.stroke_class_boost:
         if "=" not in value:
@@ -709,6 +782,7 @@ def main() -> None:
                 side_loss_weight=args.side_loss_weight,
                 fine_stroke_loss_weight=args.fine_stroke_loss_weight,
                 shuttle_stroke_loss_weight=args.shuttle_stroke_loss_weight,
+                bfmd_stroke_loss_weight=args.bfmd_stroke_loss_weight,
                 zero_stroke_sample_ids=train_zero_stroke_ids,
                 optimizer=optimizer, scaler=scaler, use_amp=use_amp,
             )
@@ -717,6 +791,7 @@ def main() -> None:
                 side_loss_weight=args.side_loss_weight,
                 fine_stroke_loss_weight=args.fine_stroke_loss_weight,
                 shuttle_stroke_loss_weight=args.shuttle_stroke_loss_weight,
+                bfmd_stroke_loss_weight=args.bfmd_stroke_loss_weight,
                 zero_stroke_sample_ids=val_zero_stroke_ids,
                 optimizer=None, scaler=scaler, use_amp=use_amp,
             )
@@ -750,6 +825,8 @@ def main() -> None:
                 "shuttle_stroke_loss_weight": args.shuttle_stroke_loss_weight,
                 "shuttle_stroke_exclude_raw_label": args.shuttle_stroke_exclude_raw_label,
                 "stroke_class_boost": boosts,
+                "freeze_side_head": args.freeze_side_head,
+                "source_class_balanced_sampler": args.source_class_balanced_sampler,
                 "optimizer": optimizer.state_dict(), "scaler": scaler.state_dict(),
             }
             torch.save(state_dict_payload, args.output_dir / "latest.pth")
@@ -786,6 +863,7 @@ def main() -> None:
             "device": str(device),
             "shuttle_train_samples": len(train_records), "shuttle_val_samples": len(val_records),
             "fine_train_samples": len(fine_train_records), "fine_val_samples": len(fine_val_records),
+            "bfmd_train_samples": len(bfmd_train_records), "bfmd_val_samples": len(bfmd_val_records),
             "crop_hitter": args.crop_hitter, "crop_padding": args.crop_padding,
             "crop_size": args.crop_size,
             "unfreeze_layer4": args.unfreeze_layer4,
@@ -793,6 +871,8 @@ def main() -> None:
             "shuttle_stroke_loss_weight": args.shuttle_stroke_loss_weight,
             "shuttle_stroke_exclude_raw_label": args.shuttle_stroke_exclude_raw_label,
             "stroke_class_boost": boosts,
+            "freeze_side_head": args.freeze_side_head,
+            "source_class_balanced_sampler": args.source_class_balanced_sampler,
             "shuttle_top_sample_boost": args.shuttle_top_sample_boost,
             "shuttle_drive_sample_boost": args.shuttle_drive_sample_boost,
             "shuttle_forehand_sample_boost": args.shuttle_forehand_sample_boost,

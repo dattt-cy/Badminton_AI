@@ -35,8 +35,10 @@ LABEL_MAPPING = {
     "smash": "smash",
     "drive": "drive",
     "net_shot": "net_shot",
+    "block": "net_shot",
     "lift": "lift",
     "net_kill": "net_attack",
+    "push": "net_attack",
     "press": "net_attack",
 }
 
@@ -47,20 +49,26 @@ EXCLUDED_LABELS = {
 
 MATCH_SPLITS = {
     # 8 Train matches
+    "KAPAL-API-Indonesia-Open-2025-Anders-Antonsen-DEN-3-vs.-Chou-Tien-Chen-TPE-6-F": "train",
     "KAPAL-API-Indonesia-Open-2025-Anders-Antonsen-DEN-3-vs.-Chou-Tien-Chen-TPE-6-F": "test",
     "KAPAL-API-Indonesia-Open-2025-Chou-Tien-Chen-TPE-6-vs.-Kunlavut-Vitidsarn-THA-2-SF": "train",
     "PETRONAS-Malaysia-Open-2025-Kodai-Naraok-JPN-8-vs.-Anders-Antonsen-DEN-2-SF": "train",
     "PETRONAS-Malaysia-Open-2025-Shi-Yu-Qi-CHN-1-vs.-Li-Shi-Feng-CHN-7-SF": "train",
     "VICTOR-China-Open-2025-Chou-Tien-Chen-TPE-6-vs.-Shi-Yu-Qi-CHN-3-SF": "train",
     "VICTOR-China-Open-2025-Shi-Yu-Qi-CHN-3-vs.-Wang-Zheng-Xing-CHN-F": "train",
+    "YONEX-All-England-Open-2025-Lee-Chia-Hao-TPE-vs.-Alex-Lanier-FRA-SF": "train",
+    "YONEX-All-England-Open-2025-Shi-Yu-Qi-CHN-1-vs.-Li-Shi-Feng-CHN-6-SF": "train",
     "YONEX-All-England-Open-2025-Lee-Chia-Hao-TPE-vs.-Alex-Lanier-FRA-SF": "test",
     "YONEX-All-England-Open-2025-Shi-Yu-Qi-CHN-1-vs.-Li-Shi-Feng-CHN-6-SF": "val",
 
     # 2 Val matches
     "KAPAL-API-Indonesia-Open-2025-Shi-Yu-Qi-CHN-1-vs.-Anders-Antonsen-DEN-3-SF": "val",
+    "VICTOR-China-Open-2025-Wang-Zheng-Xing-CHN-vs.-Anders-Antonsen-DEN-2-SF": "val",
     "VICTOR-China-Open-2025-Wang-Zheng-Xing-CHN-vs.-Anders-Antonsen-DEN-2-SF": "train",
 
     # 2 Test matches
+    "PETRONAS-Malaysia-Open-2025-Shi-Yu-Qi-CHN-1-vs.-Anders-Antonsen-DEN-2-F": "test",
+    "YONEX-All-England-Open-2025-Shi-Yu-Qi-CHN-1-vs.-Lee-Chia-Hao-TPE-F": "test",
     "PETRONAS-Malaysia-Open-2025-Shi-Yu-Qi-CHN-1-vs.-Anders-Antonsen-DEN-2-F": "train",
     "YONEX-All-England-Open-2025-Shi-Yu-Qi-CHN-1-vs.-Lee-Chia-Hao-TPE-F": "train",
 }
@@ -111,6 +119,7 @@ def main():
 
     for jpath in json_files:
         mname = Path(jpath).stem
+        split = MATCH_SPLITS.get(mname, "train")
         if mname not in MATCH_SPLITS:
             raise ValueError(f"Missing explicit split assignment for match: {mname}")
         split = MATCH_SPLITS[mname]
@@ -124,6 +133,7 @@ def main():
             raw_shot = h.get("shot_type")
             coarse = LABEL_MAPPING.get(raw_shot)
             if coarse is None:
+                print(f"Warning: Unknown shot type '{raw_shot}' in {mname}")
                 excluded_counter[raw_shot or "<missing>"] += 1
                 continue
 
@@ -202,3 +212,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

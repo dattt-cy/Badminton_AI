@@ -56,11 +56,13 @@ def parse_args() -> argparse.Namespace:
 
 CLASS_PRIOR_WEIGHTS = {
     "drive": 4.160,
+    "drive": 1.200,
     "clear": 2.858,
     "lift": 1.487,
     "smash": 0.748,
     "drop": 0.654,
     "net_attack": 0.600,
+    "net_attack": 1.000,
     "net_shot": 0.394,
     "serve": 1.000,
 }
@@ -479,6 +481,7 @@ def main() -> None:
             h_vid = sel_meta.get("height", 1080)
             yc = (box[1] + box[3]) / 2.0 / max(1, h_vid)
             is_backcourt = (active_player_side == "bottom" and yc >= 0.68) or (active_player_side == "top" and yc <= 0.32)
+            is_backcourt = (active_player_side == "bottom" and yc >= 0.74) or (active_player_side == "top" and yc <= 0.24)
             is_net = (active_player_side == "bottom" and yc <= 0.52) or (active_player_side == "top" and yc >= 0.46)
             if is_backcourt:
                 stroke_probabilities = stroke_probabilities.clone()
@@ -495,6 +498,14 @@ def main() -> None:
                         stroke_probabilities[c_idx] *= 2.0
                     elif c_name in {"clear", "smash"}:
                         stroke_probabilities[c_idx] *= 0.20
+                stroke_probabilities = stroke_probabilities / stroke_probabilities.sum()
+            else:
+                # Mid-court zone: gentle suppression of impossible net actions
+                # Do NOT aggressively boost drive or clear, letting the model's raw features decide
+                stroke_probabilities = stroke_probabilities.clone()
+                for c_idx, c_name in enumerate(stroke_classes):
+                    if c_name == "net_shot":
+                        stroke_probabilities[c_idx] *= 0.40
                 stroke_probabilities = stroke_probabilities / stroke_probabilities.sum()
 
         # For side (forehand/backhand): blend best strike window with full clip

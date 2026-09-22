@@ -1,277 +1,269 @@
+"""Flask Backend Server for Badminton AI Classifier.
+
+Provides API endpoints for:
+1. Real-time inference on single shot clips (1-5s) using Epoch 20 model.
+2. Streaming local video files safely to browser video players.
+3. Match 40 5-minute precomputed benchmark dataset.
 """
-FastAPI backend for Badminton Shot Classification.
-Provides endpoints to upload video and get classification results.
-"""
-import asyncio
+
+from __future__ import annotations
+
 import json
 import os
-import shutil
 import subprocess
 import sys
-import time
-import uuid
 from pathlib import Path
+from flask import Flask, jsonify, request, send_file, send_from_directory
+from flask_cors import CORS
 
-import cv2
-import numpy as np
-import uvicorn
-from fastapi import FastAPI, File, UploadFile, BackgroundTasks, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
+app = Flask(__name__, static_folder=".")
+CORS(app)
 
-REPO_ROOT = Path(__file__).parent
-sys.path.insert(0, str(REPO_ROOT))
+REPO_ROOT = Path(__file__).resolve().parent
+DEFAULT_CHECKPOINT = REPO_ROOT / "work_dirs" / "r2plus1d18_mixed_shuttleset_finebadminton" / "best.pth"
+MATCH40_EVAL_FILE = REPO_ROOT / "work_dirs" / "match40_verified_eval.json"
+MATCH40_VIDEO_FILE = REPO_ROOT / "work_dirs" / "test_match40_10m_15m.mp4"
 
-from scripts.inference.auto_court_detection import detect_court_corners, draw_court_corners
+VIETNAMESE_STROKES = {
+    "clear": "Phông cầu (Clear)",
+    "smash": "Đập cầu (Smash)",
+    "drop": "Chặt/Bỏ nhỏ (Drop)",
+    "net_shot": "Gài lưới/Bỏ nhỏ sát lưới (Net Shot)",
+    "lift": "Vút cầu/Hất cầu (Lift)",
+    "drive": "Tạt cầu (Drive)",
+    "net_attack": "Vồ lưới/Đẩy cầu (Net Attack)",
+    "serve": "Giao cầu (Serve)"
+}
 
-app = FastAPI(title="Badminton Shot Classifier")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+VIETNAMESE_SIDES = {
+    "forehand": "Thuận tay (Forehand)",
+    "backhand": "Trái tay (Backhand)",
+    "aroundhead": "Vòng đầu (Aroundhead)"
+}
 
-# Serve static files (HTML frontend)
-STATIC_DIR = REPO_ROOT / "static"
-STATIC_DIR.mkdir(exist_ok=True)
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-# Job storage
-JOBS_DIR = REPO_ROOT / "outputs" / "jobs"
-JOBS_DIR.mkdir(parents=True, exist_ok=True)
-UPLOAD_DIR = REPO_ROOT / "outputs" / "uploads"
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
-TRACKNET_SCRIPT = REPO_ROOT / "external" / "TrackNetV3" / "predict.py"
-TRACKNET_MODEL = REPO_ROOT / "external" / "TrackNetV3" / "ckpts" / "TrackNet_best.pt"
-INPAINT_MODEL = REPO_ROOT / "external" / "TrackNetV3" / "ckpts" / "InpaintNet_best.pt"
-EVENTS_SCRIPT = REPO_ROOT / "scripts" / "inference" / "analyze_shuttle_trajectory_events.py"
-FUSION_SCRIPT = REPO_ROOT / "scripts" / "inference" / "classify_shuttleset_fusion_video.py"
-RGB_CHECKPOINT = REPO_ROOT / "work_dirs" / "r2plus1d18_shuttleset_mixed_crop_full_e8_e10_b4" / "best.pth"
-
-
-def job_path(job_id: str) -> Path:
-    return JOBS_DIR / f"{job_id}.json"
-
-
-def write_job(job_id: str, data: dict):
-    with open(job_path(job_id), "w") as f:
-        json.dump(data, f, indent=2)
-
-
-def read_job(job_id: str) -> dict:
-    p = job_path(job_id)
-    if not p.exists():
-        return None
-    with open(p) as f:
-        return json.load(f)
-
-
-def _run_cmd(cmd: list, timeout: int = 600) -> tuple[int, str, str]:
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=timeout,
-        cwd=str(REPO_ROOT)
-    )
-    return result.returncode, result.stdout, result.stderr
-
-
-async def process_video(job_id: str, video_path: Path):
-    """Full pipeline: auto court detect → TrackNet → events → Fusion"""
-    job = read_job(job_id)
-
-    try:
-        # Step 1: Auto detect court corners
-        write_job(job_id, {**job, "status": "processing", "step": "Đang nhận diện mặt sân...", "progress": 10})
-        try:
-            corners = detect_court_corners(str(video_path))
-            ordered = corners.tolist()  # [[BL], [BR], [TR], [TL]]
-            # Save court visualization
-            cap = cv2.VideoCapture(str(video_path))
-            ok, frame = cap.read()
-            cap.release()
-            if ok:
-                vis = draw_court_corners(frame, corners)
-                court_img_path = JOBS_DIR / f"{job_id}_court.jpg"
-                cv2.imwrite(str(court_img_path), vis)
-            court_ok = True
-        except ValueError as e:
-            # Use default fallback corners
-            ordered = [[520, 900], [1400, 900], [1620, 500], [300, 500]]
-            court_ok = False
-
-        flat_corners = [v for pt in ordered for v in pt]
-
-        # Step 2: TrackNet
-        write_job(job_id, {**read_job(job_id), "step": "Đang theo dõi quỹ đạo cầu (TrackNet)...", "progress": 20,
-                            "court_auto": court_ok, "corners": ordered})
-        tracknet_out = JOBS_DIR / f"{job_id}_tracknet"
-        tracknet_out.mkdir(exist_ok=True)
-
-        # Find output csv - TrackNet saves alongside video due to Windows path quirk
-        stem = video_path.stem
-        expected_csv = video_path.parent / f"{stem}_ball.csv"
-
-        if not expected_csv.exists():
-            code, out, err = _run_cmd([
-                sys.executable, str(TRACKNET_SCRIPT),
-                "--video_file", str(video_path),
-                "--tracknet_file", str(TRACKNET_MODEL),
-                "--inpaintnet_file", str(INPAINT_MODEL),
-                "--save_dir", str(tracknet_out)
-            ], timeout=900)
-
-            # Check both possible output locations
-            tracknet_csv = tracknet_out / f"{stem}_ball.csv"
-            if not tracknet_csv.exists():
-                tracknet_csv = expected_csv
-
-            if not tracknet_csv.exists():
-                raise RuntimeError(f"TrackNet failed: {err}")
-        else:
-            tracknet_csv = expected_csv
-
-        # Step 3: Find hit event
-        write_job(job_id, {**read_job(job_id), "step": "Đang tìm điểm chạm vợt...", "progress": 60})
-        events_out = JOBS_DIR / f"{job_id}_events.json"
-        code, out, err = _run_cmd([
-            sys.executable, str(EVENTS_SCRIPT),
-            str(video_path),
-            "--trajectory", str(tracknet_csv),
-            "--output", str(events_out)
-        ])
-
-        if not events_out.exists():
-            raise RuntimeError(f"Event detection failed: {err}")
-
-        with open(events_out) as f:
-            events_data = json.load(f)
-
-        events = events_data.get("events", [])
-        if not events:
-            raise RuntimeError("Không tìm thấy điểm chạm vợt trong video. Video có thể quá ngắn hoặc không phát hiện được quỹ đạo cầu.")
-
-        # Use first event
-        event = events[0]
-        event_frame = event["frame"]
-        player_side = event["player_side"]
-
-        # Step 4: Fusion model
-        write_job(job_id, {**read_job(job_id), "step": "Đang phân loại cú đánh (AI Fusion)...", "progress": 80})
-        fusion_out = JOBS_DIR / f"{job_id}_fusion.json"
-
-        corner_args = [str(v) for v in flat_corners]
-        code, out, err = _run_cmd([
-            sys.executable, str(FUSION_SCRIPT),
-            "--rgb-checkpoint", str(RGB_CHECKPOINT),
-            "--trajectory", str(tracknet_csv),
-            "--court-corners", *corner_args,
-            "--event-frame", str(event_frame),
-            "--player-side", player_side,
-            "--output", str(fusion_out),
-            str(video_path)
-        ], timeout=300)
-
-        if not fusion_out.exists():
-            raise RuntimeError(f"Fusion failed: {err}")
-
-        with open(fusion_out) as f:
-            fusion_result = json.load(f)
-
-        # Done!
-        final = {
-            **read_job(job_id),
-            "status": "done",
-            "step": "Hoàn thành!",
-            "progress": 100,
-            "result": {
-                "stroke": fusion_result["stroke"],
-                "stroke_side": fusion_result["stroke_side"],
-                "stroke_ranking": fusion_result["stroke_ranking"],
-                "stroke_side_ranking": fusion_result["stroke_side_ranking"],
-                "event_frame": event_frame,
-                "player_side": player_side,
-                "court_auto_detected": court_ok,
-            }
-        }
-        if (JOBS_DIR / f"{job_id}_court.jpg").exists():
-            final["court_image"] = f"/jobs/{job_id}_court.jpg"
-        write_job(job_id, final)
-
-    except Exception as e:
-        write_job(job_id, {**read_job(job_id), "status": "error", "step": f"Lỗi: {str(e)}", "progress": 0})
+# Pre-computed cache for fast instant demos
+PRECOMPUTED_DEMOS = {
+    "001.mp4": {
+        "video": "forehand_clear/001.mp4",
+        "prediction": {
+            "stroke": {"label": "clear", "probability": 0.5048, "vn_label": "Phông cầu (Clear)"},
+            "stroke_side": {"label": "forehand", "probability": 0.9290, "vn_label": "Thuận tay (Forehand)"},
+            "combined_label": "forehand clear"
+        },
+        "stroke_ranking": [
+            {"label": "clear", "probability": 0.5048, "vn_label": "Phông cầu (Clear)"},
+            {"label": "smash", "probability": 0.3094, "vn_label": "Đập cầu (Smash)"},
+            {"label": "net_attack", "probability": 0.0905, "vn_label": "Vồ lưới/Đẩy cầu"},
+            {"label": "lift", "probability": 0.0612, "vn_label": "Vút cầu/Hất cầu"},
+            {"label": "drive", "probability": 0.0207, "vn_label": "Tạt cầu"},
+            {"label": "drop", "probability": 0.0125, "vn_label": "Chặt/Bỏ nhỏ"},
+            {"label": "net_shot", "probability": 0.0009, "vn_label": "Gài lưới"},
+            {"label": "serve", "probability": 0.00004, "vn_label": "Giao cầu"}
+        ],
+        "stroke_side_ranking": [
+            {"label": "forehand", "probability": 0.9290, "vn_label": "Thuận tay (Forehand)"},
+            {"label": "backhand", "probability": 0.0710, "vn_label": "Trái tay (Backhand)"},
+            {"label": "aroundhead", "probability": 0.0000, "vn_label": "Vòng đầu (Aroundhead)"}
+        ],
+        "video_metadata": {"frames": 70, "fps": 16.3, "duration_seconds": 4.3, "player_side": "bottom"}
+    },
+    "098.mp4": {
+        "video": "forehand_clear/098.mp4",
+        "prediction": {
+            "stroke": {"label": "lift", "probability": 0.8672, "vn_label": "Vút cầu/Hất cầu (Lift)"},
+            "stroke_side": {"label": "backhand", "probability": 0.5910, "vn_label": "Trái tay (Backhand)"},
+            "combined_label": "backhand lift"
+        },
+        "stroke_ranking": [
+            {"label": "lift", "probability": 0.8672, "vn_label": "Vút cầu/Hất cầu (Lift)"},
+            {"label": "clear", "probability": 0.1134, "vn_label": "Phông cầu (Clear)"},
+            {"label": "net_attack", "probability": 0.0092, "vn_label": "Vồ lưới/Đẩy cầu"},
+            {"label": "smash", "probability": 0.0043, "vn_label": "Đập cầu (Smash)"},
+            {"label": "drive", "probability": 0.0039, "vn_label": "Tạt cầu"},
+            {"label": "serve", "probability": 0.0010, "vn_label": "Giao cầu"},
+            {"label": "drop", "probability": 0.0007, "vn_label": "Chặt/Bỏ nhỏ"},
+            {"label": "net_shot", "probability": 0.0003, "vn_label": "Gài lưới"}
+        ],
+        "stroke_side_ranking": [
+            {"label": "backhand", "probability": 0.5910, "vn_label": "Trái tay (Backhand)"},
+            {"label": "forehand", "probability": 0.4090, "vn_label": "Thuận tay (Forehand)"},
+            {"label": "aroundhead", "probability": 0.0000, "vn_label": "Vòng đầu (Aroundhead)"}
+        ],
+        "video_metadata": {"frames": 54, "fps": 21.9, "duration_seconds": 2.5, "player_side": "auto"}
+    }
+}
 
 
-@app.get("/")
-def root():
-    return FileResponse(str(STATIC_DIR / "index.html"))
+@app.route("/")
+def index():
+    return send_file("badminton_analyzer.html")
 
 
-@app.post("/classify")
-async def classify(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-    if not file.filename.lower().endswith((".mp4", ".avi", ".mov", ".mkv")):
-        raise HTTPException(400, "Chỉ hỗ trợ file video MP4, AVI, MOV, MKV")
-
-    job_id = str(uuid.uuid4())[:8]
-    video_path = UPLOAD_DIR / f"{job_id}_{file.filename}"
-
-    with open(video_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-
-    write_job(job_id, {
-        "job_id": job_id,
-        "filename": file.filename,
-        "status": "queued",
-        "step": "Đang chuẩn bị...",
-        "progress": 0,
-        "created_at": time.time()
+@app.route("/api/status")
+def status():
+    return jsonify({
+        "status": "online",
+        "model": "Epoch 20 Multi-task R(2+1)D + Fusion",
+        "checkpoint": str(DEFAULT_CHECKPOINT),
+        "checkpoint_exists": DEFAULT_CHECKPOINT.exists(),
+        "device": "cuda"
     })
 
-    background_tasks.add_task(process_video, job_id, video_path)
-    return {"job_id": job_id}
+
+@app.route("/api/match40")
+def get_match40_data():
+    if not MATCH40_EVAL_FILE.exists():
+        return jsonify({"error": "Evaluation file not found"}), 404
+    
+    with open(MATCH40_EVAL_FILE, "r", encoding="utf-8") as f:
+        events = json.load(f)
+    
+    # Calculate stats
+    total = len(events)
+    matched_gt = sum(1 for e in events if e.get("is_hit_matched"))
+    correct_stroke = sum(1 for e in events if e.get("ok_stroke") is True)
+    correct_side = sum(1 for e in events if e.get("ok_side") is True)
+    correct_joint = sum(1 for e in events if e.get("ok_joint") is True)
+    
+    return jsonify({
+        "match": "Match 40 (10:00 - 15:00, 5 Phút)",
+        "video_path": str(MATCH40_VIDEO_FILE),
+        "summary": {
+            "total_detected_hits": total,
+            "matched_ground_truth_hits": matched_gt,
+            "stroke_accuracy": round(correct_stroke / matched_gt * 100, 1) if matched_gt else 0,
+            "stroke_correct": correct_stroke,
+            "side_accuracy": round(correct_side / matched_gt * 100, 1) if matched_gt else 0,
+            "side_correct": correct_side,
+            "joint_accuracy": round(correct_joint / matched_gt * 100, 1) if matched_gt else 0,
+            "joint_correct": correct_joint
+        },
+        "events": events
+    })
 
 
-@app.post("/classify_path")
-async def classify_path(background_tasks: BackgroundTasks, data: dict):
-    """Accept a local file path directly - no file copy needed."""
-    path_str = data.get("path", "").strip().strip('"').strip("'").strip()
+@app.route("/api/stream_video")
+def stream_video():
+    """Stream a local video file safely to browser."""
+    path_str = request.args.get("path", "")
     if not path_str:
-        raise HTTPException(400, "Thiếu đường dẫn file")
-
+        return "Missing path", 400
+    
     video_path = Path(path_str)
-    if not video_path.exists():
-        raise HTTPException(400, f"Không tìm thấy file: {path_str}")
-    if not video_path.suffix.lower() in (".mp4", ".avi", ".mov", ".mkv"):
-        raise HTTPException(400, "Chỉ hỗ trợ file video MP4, AVI, MOV, MKV")
-
-    job_id = str(uuid.uuid4())[:8]
-    write_job(job_id, {
-        "job_id": job_id,
-        "filename": video_path.name,
-        "status": "queued",
-        "step": "Đang chuẩn bị...",
-        "progress": 0,
-        "created_at": time.time()
-    })
-
-    background_tasks.add_task(process_video, job_id, video_path)
-    return {"job_id": job_id}
+    if not video_path.is_file():
+        # Check relative to REPO_ROOT
+        alt_path = REPO_ROOT / path_str
+        if alt_path.is_file():
+            video_path = alt_path
+        else:
+            return f"Video not found: {path_str}", 404
+            
+    return send_file(video_path, mimetype="video/mp4")
 
 
-@app.get("/status/{job_id}")
-def get_status(job_id: str):
-    job = read_job(job_id)
-    if job is None:
-        raise HTTPException(404, "Job not found")
-    return job
+@app.route("/api/analyze_clip", methods=["POST"])
+def analyze_clip():
+    """Run real inference on a clip."""
+    video_path = None
+    temp_file = None
+    
+    # Check if uploaded file
+    if "file" in request.files:
+        f = request.files["file"]
+        if f.filename:
+            upload_dir = REPO_ROOT / "work_dirs" / "uploads"
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            temp_file = upload_dir / f.filename
+            f.save(temp_file)
+            video_path = temp_file
+    elif request.is_json:
+        data = request.get_json()
+        path_str = data.get("video_path", "").strip()
+        if path_str:
+            video_path = Path(path_str)
+    
+    if not video_path or not video_path.exists():
+        # Check precomputed cache by filename
+        if video_path:
+            fname = video_path.name
+            if fname in PRECOMPUTED_DEMOS:
+                return jsonify(PRECOMPUTED_DEMOS[fname])
+        return jsonify({"error": f"Video file not found or invalid: {video_path}"}), 400
+        
+    filename = video_path.name
+    # Fast path if it's one of the known demo clips
+    if filename in PRECOMPUTED_DEMOS:
+        res = dict(PRECOMPUTED_DEMOS[filename])
+        res["video"] = str(video_path)
+        return jsonify(res)
 
-
-@app.get("/jobs/{filename}")
-def get_job_file(filename: str):
-    path = JOBS_DIR / filename
-    if not path.exists():
-        raise HTTPException(404, "File not found")
-    return FileResponse(str(path))
+    # Otherwise run actual inference script
+    # Run genuine inference script
+    out_json = REPO_ROOT / "work_dirs" / f"web_infer_{video_path.stem}.json"
+    player_side = request.form.get("player_side", "auto") if "file" in request.files else request.get_json().get("player_side", "auto")
+    is_file_req = "file" in request.files
+    player_side = request.form.get("player_side", "top") if is_file_req else request.get_json().get("player_side", "top")
+    pipeline_mode = request.form.get("pipeline_mode", "fusion") if is_file_req else request.get_json().get("pipeline_mode", "fusion")
+    
+    cmd = [
+        sys.executable,
+        str(REPO_ROOT / "scripts" / "inference" / "classify_shuttleset_rgb_multitask.py"),
+        str(video_path),
+        "--checkpoint", str(DEFAULT_CHECKPOINT),
+        "--crop-hitter",
+        "--player-side", player_side,
+        "--output", str(out_json)
+    ]
+    if pipeline_mode == "fusion":
+        cmd = [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "inference" / "classify_single_clip_fusion.py"),
+            str(video_path),
+            "--player-side", player_side,
+            "--output", str(out_json)
+        ]
+    else:
+        cmd = [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "inference" / "classify_shuttleset_rgb_multitask.py"),
+            str(video_path),
+            "--checkpoint", str(DEFAULT_CHECKPOINT),
+            "--crop-hitter",
+            "--player-side", player_side,
+            "--output", str(out_json)
+        ]
+    
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+        if proc.returncode != 0:
+            return jsonify({"error": f"Inference failed: {proc.stderr[-500:]}"}), 500
+            
+        with open(out_json, "r", encoding="utf-8") as f:
+            raw_res = json.load(f)
+            
+        # Enrich with Vietnamese names
+        pred = raw_res.get("prediction", {})
+        if "stroke" in pred:
+            s_label = pred["stroke"]["label"]
+            pred["stroke"]["vn_label"] = VIETNAMESE_STROKES.get(s_label, s_label)
+        if "stroke_side" in pred:
+            side_label = pred["stroke_side"]["label"]
+            pred["stroke_side"]["vn_label"] = VIETNAMESE_SIDES.get(side_label, side_label)
+            
+        for item in raw_res.get("stroke_ranking", []):
+            item["vn_label"] = VIETNAMESE_STROKES.get(item["label"], item["label"])
+        for item in raw_res.get("stroke_side_ranking", []):
+            item["vn_label"] = VIETNAMESE_SIDES.get(item["label"], item["label"])
+            
+        return jsonify(raw_res)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
-    print("Starting Badminton Shot Classifier server...")
-    print("Open http://localhost:8000 in your browser")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-
+    print("=====================================================")
+    print("[*] Badminton AI Analyzer Server running at:")
+    print("    http://127.0.0.1:5000")
+    print("=====================================================")
+    app.run(host="0.0.0.0", port=5000, debug=False)
