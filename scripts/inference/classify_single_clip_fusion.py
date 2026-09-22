@@ -22,6 +22,7 @@ from ai_classifier.localization.fast_tracknet import FastTrackNet
 from scripts.inference.analyze_long_video import default_corners
 from scripts.inference.auto_court_detection import detect_court_corners
 from scripts.inference.classify_shuttleset_fusion_video import classify_fusion_event
+from scripts.inference.classify_shuttleset_rgb_multitask import auto_detect_player_side
 from scripts.training.train_shuttleset_feature_fusion import FusionHead
 from scripts.training.train_shuttleset_rgb_multitask import MultiTaskR2Plus1D
 
@@ -89,7 +90,23 @@ def run_fusion_on_clip(
     trajectory = tracker.predict_window(video_path, event_frame, window_before=30, window_after=30)
 
     # Map player_side
-    p_side = "upper" if player_side in ("top", "upper") else ("lower" if player_side in ("bottom", "lower") else "upper")
+    if player_side in ("top", "upper"):
+        p_side = "upper"
+    elif player_side in ("bottom", "lower"):
+        p_side = "lower"
+    else:
+        # Check filename first (e.g. _xa_ or _top_ vs _gan_ or _bottom_)
+        fname = video_path.name.lower()
+        if "_xa_" in fname or "_top_" in fname:
+            p_side = "upper"
+        elif "_gan_" in fname or "_bottom_" in fname:
+            p_side = "lower"
+        else:
+            try:
+                det = auto_detect_player_side(video_path, pose_model)
+                p_side = "upper" if det == "top" else "lower"
+            except Exception:
+                p_side = "upper"
 
     raw_res = classify_fusion_event(
         video_path, trajectory, event_frame, p_side, corners,
