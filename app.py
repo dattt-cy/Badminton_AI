@@ -226,7 +226,7 @@ def analyze_clip():
         ]
     
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
         if proc.returncode != 0:
             return jsonify({"error": f"Inference failed: {proc.stderr[-500:]}"}), 500
             
