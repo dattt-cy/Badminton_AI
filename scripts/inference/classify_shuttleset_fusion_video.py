@@ -22,10 +22,8 @@ if str(REPO_ROOT) not in sys.path:
 from ai_classifier.localization.fast_tracknet import FastTrackNet
 from ai_classifier.localization.shuttle_events import load_tracknet_csv
 from scripts.inference.classify_shuttleset_rgb_multitask import ranked, read_hitter_clip
-from scripts.training.train_shuttleset_feature_fusion import (
-    FusionHead, structured_feature_arrays, target_aligned_feature_arrays,
-)
-from scripts.training.train_shuttleset_rgb_multitask import MultiTaskR2Plus1D, SIDE_CLASSES, STROKE_CLASSES
+from ai_classifier.models import FusionHead, MultiTaskR2Plus1D, SIDE_CLASSES, STROKE_CLASSES
+from ai_classifier.features import structured_feature_arrays, target_aligned_feature_arrays
 
 
 def parse_args() -> argparse.Namespace:

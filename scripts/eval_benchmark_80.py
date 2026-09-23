@@ -25,8 +25,7 @@ from scripts.inference.classify_shuttleset_fusion_video import (
     STROKE_CLASSES,
     SIDE_CLASSES
 )
-from scripts.training.train_shuttleset_feature_fusion import FusionHead
-from scripts.training.train_shuttleset_rgb_multitask import MultiTaskR2Plus1D
+from ai_classifier.models import FusionHead, MultiTaskR2Plus1D
 import cv2
 
 def benchmark_all():

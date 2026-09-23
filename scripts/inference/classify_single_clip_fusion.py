@@ -23,8 +23,7 @@ from scripts.inference.analyze_long_video import default_corners
 from scripts.inference.auto_court_detection import detect_court_corners
 from scripts.inference.classify_shuttleset_fusion_video import classify_fusion_event
 from scripts.inference.classify_shuttleset_rgb_multitask import auto_detect_player_side
-from scripts.training.train_shuttleset_feature_fusion import FusionHead
-from scripts.training.train_shuttleset_rgb_multitask import MultiTaskR2Plus1D
+from ai_classifier.models import FusionHead, MultiTaskR2Plus1D
 
 VIETNAMESE_STROKES = {
     "clear": "Phông cầu (Clear)",

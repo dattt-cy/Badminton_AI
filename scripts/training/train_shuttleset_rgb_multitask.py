@@ -18,6 +18,7 @@ import torch
 from torch import nn
 from torch.utils.data import ConcatDataset, DataLoader, Dataset, WeightedRandomSampler
 from torchvision.models.video import r2plus1d_18
+from torchvision.models.video import r2plus1d_18, R2Plus1D_18_Weights
 from torchvision.transforms import functional as vision_functional
 from ultralytics import YOLO
 
@@ -140,6 +141,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--val-samples-per-side", type=int,
         help="Optional balanced validation cap per stroke-side class.",
+    )
+    parser.add_argument(
+        "--grad-accum-steps", type=int, default=1,
+        help="Gradient accumulation steps to simulate larger effective batch sizes.",
     )
     return parser.parse_args()
 
@@ -297,6 +302,14 @@ def decode_clip(
     tensor = vision_functional.resize(tensor, [128, 171], antialias=False)
     return vision_functional.center_crop(tensor, [112, 112]).contiguous()
 
+def resolve_cached_tensor_path(cache_dir: Path | None, frame_count: int, crop_size: int, sample_id: str) -> Path | None:
+    if cache_dir is None:
+        return None
+    folder_name = f"frames_{frame_count}" if crop_size == 112 else f"frames_{frame_count}_crop_{crop_size}"
+    if cache_dir.name == folder_name or cache_dir.name.startswith("frames_"):
+        return cache_dir / f"{sample_id}.npy"
+    return cache_dir / folder_name / f"{sample_id}.npy"
+
 
 class ShuttleSetRGBDataset(Dataset):
     def __init__(
@@ -328,6 +341,7 @@ class ShuttleSetRGBDataset(Dataset):
             ) / f"{record.sample_id}.npy"
             if self.cache_dir is not None else None
         )
+        cache_path = resolve_cached_tensor_path(self.cache_dir, self.frame_count, self.crop_size, record.sample_id)
         if cache_path is not None and cache_path.is_file():
             tensor = torch.from_numpy(np.load(cache_path))
         else:
@@ -394,6 +408,7 @@ class FineJointDataset(Dataset):
             ) / f"{record.sample_id}.npy"
             if self.cache_dir is not None else None
         )
+        cache_path = resolve_cached_tensor_path(self.cache_dir, self.frame_count, self.crop_size, record.sample_id)
         if cache_path is not None and cache_path.is_file():
             tensor = torch.from_numpy(np.load(cache_path))
         else:
@@ -421,6 +436,11 @@ class CachedStrokeOnlyDataset(Dataset):
     def __init__(self, records, cache_dir: Path, frame_count: int, training: bool, prefix: str):
         self.records, self.cache_dir, self.training, self.prefix = records, cache_dir, training, prefix
         self.folder = cache_dir / f"frames_{frame_count}"
+        folder_name = f"frames_{frame_count}"
+        if cache_dir.name == folder_name or cache_dir.name.startswith("frames_"):
+            self.folder = cache_dir
+        else:
+            self.folder = cache_dir / folder_name
         self.stroke_to_id = {name: index for index, name in enumerate(STROKE_CLASSES)}
 
     def __len__(self): return len(self.records)
@@ -428,6 +448,12 @@ class CachedStrokeOnlyDataset(Dataset):
     def __getitem__(self, index):
         record = self.records[index]
         tensor = torch.from_numpy(np.load(self.folder / f"{record.sample_id}.npy")).float().div_(255.0)
+        path = self.folder / f"{record.sample_id}.npy"
+        if not path.is_file():
+            alt_path = self.cache_dir / f"frames_{16}" / f"{record.sample_id}.npy"
+            if alt_path.is_file():
+                path = alt_path
+        tensor = torch.from_numpy(np.load(path)).float().div_(255.0)
         mean = tensor.new_tensor([0.43216, 0.394666, 0.37645]).view(1, 3, 1, 1)
         std = tensor.new_tensor([0.22803, 0.22145, 0.216989]).view(1, 3, 1, 1)
         tensor = ((tensor - mean) / std).permute(1, 0, 2, 3)
@@ -451,9 +477,10 @@ def balanced_fine_subset(records, count: int | None, seed: int):
 
 
 class MultiTaskR2Plus1D(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self, pretrained: bool = True) -> None:
         super().__init__()
-        self.backbone = r2plus1d_18(weights=None)
+        weights = R2Plus1D_18_Weights.DEFAULT if pretrained else None
+        self.backbone = r2plus1d_18(weights=weights)
         features = self.backbone.fc.in_features
         self.backbone.fc = nn.Identity()
         self.stroke_head = nn.Linear(features, len(STROKE_CLASSES))
@@ -531,6 +558,8 @@ def run_epoch(
     optimizer: torch.optim.Optimizer | None,
     scaler: torch.amp.GradScaler,
     use_amp: bool,
+    grad_accum_steps: int = 1,
+    epoch: int = 1,
 ) -> tuple[float, torch.Tensor, torch.Tensor]:
     training = optimizer is not None
     model.train(training)
@@ -544,12 +573,12 @@ def run_epoch(
     sample_count = 0
     context = torch.enable_grad() if training else torch.inference_mode()
     with context:
-        for clips, stroke_labels, side_labels, sample_ids in loader:
+        if training and optimizer is not None:
+            optimizer.zero_grad(set_to_none=True)
+        for step_idx, (clips, stroke_labels, side_labels, sample_ids) in enumerate(loader):
             clips = clips.to(device)
             stroke_labels = stroke_labels.to(device)
             side_labels = side_labels.to(device)
-            if training:
-                optimizer.zero_grad(set_to_none=True)
             with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=use_amp):
                 stroke_logits, side_logits = model(clips)
                 stroke_losses = stroke_criterion(stroke_logits, stroke_labels)
@@ -566,10 +595,18 @@ def run_epoch(
                     loss = loss + side_loss_weight * side_criterion(
                         side_logits[side_mask], side_labels[side_mask]
                     )
+                loss_scaled = loss / grad_accum_steps
             if training:
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
+                scaler.scale(loss_scaled).backward()
+                if (step_idx + 1) % grad_accum_steps == 0 or (step_idx + 1) == len(loader):
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad(set_to_none=True)
+                if step_idx % 100 == 0:
+                    print(
+                        f"  [Epoch {epoch} | Step {step_idx}/{len(loader)}] "
+                        f"loss={loss.item():.4f}", flush=True
+                    )
             for truth, prediction in zip(stroke_labels.cpu(), stroke_logits.argmax(1).cpu()):
                 stroke_confusion[int(truth), int(prediction)] += 1
             for truth, prediction in zip(side_labels.cpu(), side_logits.argmax(1).cpu()):
@@ -703,8 +740,13 @@ def main() -> None:
             raise ValueError("Resume checkpoint side classes do not match")
         model.load_state_dict(resume_checkpoint["model"])
         source_epoch = int(resume_checkpoint.get("source_epoch", 0))
+    elif args.fine_checkpoint is not None and args.fine_checkpoint.is_file():
+        source_epoch = load_fine_checkpoint(model, args.fine_checkpoint)
+        print(f"[INFO] Loaded fine_checkpoint from {args.fine_checkpoint}")
     else:
         source_epoch = load_fine_checkpoint(model, args.fine_checkpoint)
+        source_epoch = 0
+        print("[INFO] Initializing model from pretrained Kinetics-400 video backbone.")
     if args.freeze_backbone:
         for parameter in model.backbone.parameters():
             parameter.requires_grad = False
@@ -746,7 +788,12 @@ def main() -> None:
     side_criterion = nn.CrossEntropyLoss(
         weight=class_weights(train_records, SIDE_CLASSES, "stroke_side").to(device)
     )
-    if args.unfreeze_layer4:
+    if args.freeze_backbone:
+        optimizer = torch.optim.AdamW(
+            [parameter for parameter in model.parameters() if parameter.requires_grad],
+            lr=args.learning_rate, weight_decay=args.weight_decay,
+        )
+    elif args.unfreeze_layer4:
         optimizer = torch.optim.AdamW(
             [
                 {"params": model.backbone.layer4.parameters(), "lr": args.backbone_learning_rate},
@@ -757,8 +804,12 @@ def main() -> None:
         )
     else:
         optimizer = torch.optim.AdamW(
-            [parameter for parameter in model.parameters() if parameter.requires_grad],
-            lr=args.learning_rate, weight_decay=args.weight_decay,
+            [
+                {"params": model.backbone.parameters(), "lr": args.backbone_learning_rate},
+                {"params": model.stroke_head.parameters(), "lr": args.learning_rate},
+                {"params": model.side_head.parameters(), "lr": args.learning_rate},
+            ],
+            weight_decay=args.weight_decay,
         )
     use_amp = bool(args.amp and device.type == "cuda")
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
@@ -785,6 +836,8 @@ def main() -> None:
                 bfmd_stroke_loss_weight=args.bfmd_stroke_loss_weight,
                 zero_stroke_sample_ids=train_zero_stroke_ids,
                 optimizer=optimizer, scaler=scaler, use_amp=use_amp,
+                grad_accum_steps=args.grad_accum_steps,
+                epoch=epoch,
             )
             val_loss, val_stroke, val_side = run_epoch(
                 model, val_loader, stroke_criterion, side_criterion, device,
@@ -794,6 +847,8 @@ def main() -> None:
                 bfmd_stroke_loss_weight=args.bfmd_stroke_loss_weight,
                 zero_stroke_sample_ids=val_zero_stroke_ids,
                 optimizer=None, scaler=scaler, use_amp=use_amp,
+                grad_accum_steps=1,
+                epoch=epoch,
             )
             metrics = {
                 "epoch": epoch,
