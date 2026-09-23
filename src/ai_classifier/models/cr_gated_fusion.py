@@ -95,12 +95,18 @@ class CRGatedFusionModel(nn.Module):
         use_contact: bool = True,
         use_gate: bool = True,
         use_cross_attention: bool = True,
+        use_ppf: bool = False,
+        use_aim_player: bool = False,
+        use_cross_shuttle: bool = False,
     ):
         super().__init__()
         self.use_temporal = use_temporal
         self.use_contact = use_contact
         self.use_gate = use_gate
         self.use_cross_attention = use_cross_attention
+        self.use_ppf = use_ppf
+        self.use_aim_player = use_aim_player
+        self.use_cross_shuttle = use_cross_shuttle
         self.hidden_dim = hidden_dim
 
         # 1. Contact-Aware Embedding
@@ -118,10 +124,26 @@ class CRGatedFusionModel(nn.Module):
             nn.Dropout(dropout),
         )
 
+        # BST-inspired: Pose-Position Fusion (PPF) - modulates pose by court coordinates
+        if use_ppf:
+            self.mlp_court_modulation = nn.Sequential(
+                nn.Linear(court_dim, 64),
+                nn.ReLU(inplace=True),
+                nn.Linear(64, pose_dim),
+                nn.Tanh(),
+            )
+
         if use_temporal:
             self.pose_encoder = TemporalConvEncoder(pose_dim, hidden_dim, dropout)
             self.court_encoder = TemporalConvEncoder(court_dim, hidden_dim, dropout)
             self.shuttle_encoder = TemporalConvEncoder(shuttle_dim, hidden_dim, dropout)
+
+            # BST-inspired: Player-Shuttle Cross Attention
+            if use_cross_shuttle:
+                self.cross_attn_pose_shuttle = nn.MultiheadAttention(
+                    embed_dim=hidden_dim, num_heads=4, batch_first=True
+                )
+                self.cross_norm = nn.LayerNorm(hidden_dim)
         else:
             # Flatten-MLP fallback (for ablation comparison with baseline)
             self.pose_encoder = nn.Linear(32 * pose_dim, hidden_dim)
@@ -175,6 +197,23 @@ class CRGatedFusionModel(nn.Module):
         """
         B = rgb.shape[0]
 
+        # BST-inspired 1: AimPlayer Soft Weighting (Velocity Cosine Alignment)
+        if self.use_aim_player and pose.shape[-1] >= 68:
+            p1_joints = pose[:, :, :34]
+            p2_joints = pose[:, :, 34:]
+            v_p1 = torch.diff(p1_joints.reshape(B, -1, 17, 2).mean(dim=2), dim=1)
+            v_p2 = torch.diff(p2_joints.reshape(B, -1, 17, 2).mean(dim=2), dim=1)
+            v_sh = torch.diff(shuttle, dim=1)
+            sim1 = F.cosine_similarity(v_p1.reshape(B, -1), v_sh.reshape(B, -1), dim=-1)
+            sim2 = F.cosine_similarity(v_p2.reshape(B, -1), v_sh.reshape(B, -1), dim=-1)
+            alpha = torch.clamp((sim1 - sim2 + 2.0) / 4.0, 0.15, 0.85).unsqueeze(-1).unsqueeze(-1)
+            pose = torch.cat([p1_joints * (alpha * 2.0), p2_joints * ((1.0 - alpha) * 2.0)], dim=-1)
+
+        # BST-inspired 2: Pose-Position Fusion (PPF Modulation)
+        if self.use_ppf:
+            pos_impact = self.mlp_court_modulation(court)
+            pose = pose * (1.0 + pos_impact)
+
         # 1. Contact embedding addition
         if self.use_contact:
             c_emb = self.contact_embed(contact_dist)  # (B, T, hidden_dim)
@@ -186,9 +225,18 @@ class CRGatedFusionModel(nn.Module):
 
         # 3. Encode Structured Sequences
         if self.use_temporal:
-            _, z_pose = self.pose_encoder(pose)
+            seq_pose, z_pose = self.pose_encoder(pose)
             _, z_court = self.court_encoder(court)
-            _, z_shuttle = self.shuttle_encoder(shuttle)
+            seq_shuttle, z_shuttle = self.shuttle_encoder(shuttle)
+
+            # BST-inspired 3: Player-Shuttle Cross Attention
+            if self.use_cross_shuttle:
+                cross_out, _ = self.cross_attn_pose_shuttle(
+                    query=seq_pose, key=seq_shuttle, value=seq_shuttle
+                )
+                z_cross = cross_out.mean(dim=1)
+                z_pose = self.cross_norm(z_pose + z_cross)
+
             if self.use_contact:
                 # Add contact context
                 z_pose = z_pose + c_emb.mean(dim=1)

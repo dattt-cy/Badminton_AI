@@ -37,8 +37,8 @@ def parse_args() -> argparse.Namespace:
         "--ablation",
         type=str,
         default="full",
-        choices=["full", "no_gate", "no_contact", "no_temporal"],
-        help="Ablation mode: full, no_gate, no_contact, or no_temporal.",
+        choices=["full", "no_gate", "no_contact", "no_temporal", "bst_enhanced"],
+        help="Ablation mode: full, no_gate, no_contact, no_temporal, or bst_enhanced.",
     )
     parser.add_argument("--epochs", type=int, default=25)
     parser.add_argument("--batch-size", type=int, default=128)
@@ -163,12 +163,18 @@ def main():
     use_temporal = args.ablation != "no_temporal"
     use_contact = args.ablation not in ("no_temporal", "no_contact")
     use_gate = args.ablation not in ("no_temporal", "no_gate")
+    use_ppf = args.ablation == "bst_enhanced"
+    use_aim_player = args.ablation == "bst_enhanced"
+    use_cross_shuttle = args.ablation == "bst_enhanced"
 
     model = CRGatedFusionModel(
         use_temporal=use_temporal,
         use_contact=use_contact,
         use_gate=use_gate,
         use_cross_attention=True,
+        use_ppf=use_ppf,
+        use_aim_player=use_aim_player,
+        use_cross_shuttle=use_cross_shuttle,
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
