@@ -224,11 +224,12 @@ def analyze_clip():
             "--player-side", player_side,
             "--output", str(out_json)
         ]
-    
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+        env = dict(os.environ, PYTHONIOENCODING="utf-8")
+        proc = subprocess.run(cmd, capture_output=True, env=env, timeout=120)
+        stderr_text = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
         if proc.returncode != 0:
-            return jsonify({"error": f"Inference failed: {proc.stderr[-500:]}"}), 500
+            return jsonify({"error": f"Inference failed: {stderr_text[-500:]}"}), 500
             
         with open(out_json, "r", encoding="utf-8") as f:
             raw_res = json.load(f)
