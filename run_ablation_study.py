@@ -28,7 +28,16 @@ MODES = [
 ]
 
 
-def run_experiment(mode: str, label: str, epochs: int = 25, seed: int = 20260923) -> dict:
+def run_experiment(mode: str, label: str, epochs: int = 25, seed: int = 20260923, force: bool = False) -> dict:
+    metrics_file = REPO_ROOT / "work_dirs" / "cr_gated_fusion" / f"cr_gated_{mode}" / "test_metrics.json"
+    if metrics_file.exists() and not force:
+        print(f"\n[CACHE HIT] Da co ket qua cho {mode} tai {metrics_file}. Bo qua huan luyen lai.")
+        with metrics_file.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        data["elapsed_sec"] = 0
+        data["label"] = label
+        return data
+
     print("\n" + "=" * 70)
     print(f"RUNNING EXPERIMENT: {mode.upper()} -> {label}")
     print("=" * 70)
@@ -46,7 +55,6 @@ def run_experiment(mode: str, label: str, epochs: int = 25, seed: int = 20260923
     elapsed = time.time() - t0
     print(f"Completed {mode} in {elapsed:.1f}s ({elapsed/60:.2f} mins)")
 
-    metrics_file = REPO_ROOT / "work_dirs" / "cr_gated_fusion" / f"cr_gated_{mode}" / "test_metrics.json"
     with metrics_file.open("r", encoding="utf-8") as f:
         data = json.load(f)
     data["elapsed_sec"] = elapsed
@@ -55,20 +63,25 @@ def run_experiment(mode: str, label: str, epochs: int = 25, seed: int = 20260923
 
 
 def main():
+    force = "--force" in sys.argv
     print("=" * 70)
     print("STARTING SCIENTIFIC ABLATION STUDY: CR-GATED MULTIMODAL FUSION")
     print("=" * 70)
 
     results = {}
     for mode, label in MODES:
-        results[mode] = run_experiment(mode, label, epochs=25)
+        results[mode] = run_experiment(mode, label, epochs=25, force=force)
 
-    # Print comprehensive Markdown comparison table
-    print("\n" + "=" * 70)
+    # Print comprehensive Markdown comparison table (ASCII safe)
+    print("\n" + "=" * 90)
     print("BANG TONG HOP ABLATION STUDY (TEST SET - 871 MAU)")
-    print("=" * 70)
-    print(f"{'Mô hình / Biến thể':<35} | {'Acc (%)':<8} | {'Macro-F1 (%)':<13} | {'Drive F1 (%)':<13} | {'Net-Attack F1 (%)'}")
-    print("-" * 88)
+    print("=" * 90)
+    print(f"{'Model / Variant':<40} | {'Acc (%)':<8} | {'Macro-F1 (%)':<13} | {'Drive F1 (%)':<13} | {'Net-Atk F1 (%)'}")
+    print("-" * 90)
+
+    # Add Baseline Epoch 20 for direct comparison
+    print(f"{'Baseline Concat-MLP (Epoch 20)':<40} | {'85.99%':>8} | {'80.26%':>13} | {'48.30%':>13} | {'58.80%':>14}")
+    print("-" * 90)
 
     for mode, label in MODES:
         res = results[mode]
@@ -76,9 +89,9 @@ def main():
         mf1 = res["test_stroke"]["macro_f1"] * 100
         drive_f1 = res["test_stroke"]["f1"][6] * 100
         net_f1 = res["test_stroke"]["f1"][7] * 100
-        print(f"{label:<35} | {acc:>6.2f}%  | {mf1:>10.2f}%   | {drive_f1:>10.2f}%   | {net_f1:>12.2f}%")
+        print(f"{label:<40} | {acc:>7.2f}% | {mf1:>12.2f}% | {drive_f1:>12.2f}% | {net_f1:>13.2f}%")
 
-    print("-" * 88)
+    print("-" * 90)
 
     # Save summary json
     summary_path = REPO_ROOT / "work_dirs" / "cr_gated_fusion" / "ablation_summary.json"
@@ -89,3 +102,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
