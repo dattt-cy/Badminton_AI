@@ -67,11 +67,20 @@ def extract_structured(
     joints, positions, valid = [], [], 0
     try:
         capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        raw_frames = []
         for _frame_index in range(start_frame, end_frame + 1):
             ok, frame = capture.read()
             if not ok:
                 break
-            result = pose_model.predict(frame, imgsz=960, conf=0.20, verbose=False)[0]
+            raw_frames.append(frame)
+
+        if raw_frames:
+            # Batched YOLO-Pose inference with FP16 for massive speedup
+            results = pose_model.predict(raw_frames, batch=16, imgsz=640, half=True, conf=0.20, verbose=False)
+        else:
+            results = []
+
+        for result in results:
             candidates = []
             if result.boxes is not None and result.keypoints is not None:
                 for box, class_id, pose in zip(
