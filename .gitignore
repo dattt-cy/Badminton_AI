@@ -53,6 +53,10 @@ wandb/
 runs/
 mlruns/
 
+# Local documentation and generated paper assets
+/docs/
+/scripts/build_paper.py
+
 # Local agentmemory state (persistent chat context)
 .agentmemory/
 .agentmemory-data/
