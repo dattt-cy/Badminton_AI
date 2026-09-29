@@ -53,6 +53,13 @@ wandb/
 runs/
 mlruns/
 
+# Local agentmemory state (persistent chat context)
+.agentmemory/
+.agentmemory-data/
+agentmemory-data/
+data/state_store.db*
+data/iii-config.yaml
+
 # Local vendor checkouts (use adapters from this repository)
 external/BST-Badminton-Stroke-type-Transformer/
 external/TrackNetV3/
