@@ -34,7 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.training.train_fine_badminton_rgb import confusion_metrics  # noqa: E402
+from scripts.training.train_kap_scratch import confusion_metrics  # noqa: E402
 
 CLASSES = ["no_hit", "upper_hit", "lower_hit"]
 SIDE_LABEL: dict[str, int] = {

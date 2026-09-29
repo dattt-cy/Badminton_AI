@@ -12,7 +12,7 @@ import torch
 from torch import nn
 from torchvision.models.video import r2plus1d_18
 
-from .fusion_head import SIDE_CLASSES, STROKE_CLASSES
+from .taxonomy import SIDE_CLASSES, STROKE_CLASSES
 
 
 class MultiTaskR2Plus1D(nn.Module):
@@ -44,4 +44,3 @@ class MultiTaskR2Plus1D(nn.Module):
     def extract_features(self, clips: torch.Tensor) -> torch.Tensor:
         """Extract visual representation embedding (512-dim)."""
         return self.backbone(clips)
-

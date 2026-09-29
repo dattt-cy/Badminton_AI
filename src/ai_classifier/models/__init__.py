@@ -1,14 +1,14 @@
 """Neural network architectures for Badminton AI Classifier."""
 
-from .fusion_head import FusionHead, SIDE_CLASSES, STROKE_CLASSES
+from .taxonomy import SIDE_CLASSES, STROKE_CLASSES
 from .multi_task_r2plus1d import MultiTaskR2Plus1D
-from .cr_gated_fusion import CRGatedFusionModel
+from .kap_fusion import KAPScratchModel, PairSpecialist, Top2Reranker
 
 __all__ = [
-    "FusionHead",
     "MultiTaskR2Plus1D",
-    "CRGatedFusionModel",
+    "KAPScratchModel",
+    "PairSpecialist",
+    "Top2Reranker",
     "STROKE_CLASSES",
     "SIDE_CLASSES",
 ]
-

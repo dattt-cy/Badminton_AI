@@ -13,8 +13,31 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+if str(REPO_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from scripts.training.train_shuttleset_feature_fusion import target_indices, resample
+from ai_classifier.features import modality_quality_vector, resample
+
+
+def target_indices(rows: list[dict], fps: int = 30) -> dict[str, int]:
+    """Locate each contact inside its between-hit source sequence."""
+    grouped: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
+    for row in rows:
+        grouped[(row["match_id"], row["set_id"], row["rally"])].append(row)
+
+    output: dict[str, int] = {}
+    for group in grouped.values():
+        ordered = sorted(group, key=lambda row: int(row["ball_round"]))
+        for index, row in enumerate(ordered):
+            current = int(float(row["hit_frame"]))
+            previous = (
+                int(float(ordered[index - 1]["hit_frame"]))
+                if index
+                else current - fps // 2
+            )
+            start = max(previous, current - fps * 3 // 2)
+            output[row["sample_id"]] = current - start
+    return output
 
 
 def extract_sample_sequences(
@@ -46,22 +69,7 @@ def extract_sample_sequences(
     w_joints, w_pos, w_shuttle = windowed
 
     # 1. Quality vector q (4 metrics)
-    shuttle_zeros = np.all(np.isclose(w_shuttle, 0.0), axis=-1) | np.isnan(w_shuttle).any(axis=-1)
-    shuttle_missing_rate = float(np.mean(shuttle_zeros))
-
-    shuttle_diff = np.diff(w_shuttle, axis=0)
-    shuttle_speed_std = float(np.std(np.linalg.norm(shuttle_diff, axis=-1))) if len(shuttle_diff) > 0 else 0.0
-
-    pose_flat = w_joints.reshape(window_length, -1)
-    pose_missing_rate = float(np.mean(np.isclose(pose_flat, 0.0)))
-    pose_motion = float(np.mean(np.std(pose_flat, axis=0)))
-
-    quality = np.array([
-        shuttle_missing_rate,
-        min(shuttle_speed_std, 100.0) / 100.0,
-        pose_missing_rate,
-        min(pose_motion, 100.0) / 100.0,
-    ], dtype=np.float32)
+    quality = modality_quality_vector(w_joints, w_shuttle)
 
     # 2. Resample to target length (32)
     s_joints = resample(w_joints, length).reshape(length, -1).astype(np.float32)  # (32, 68)
@@ -112,6 +120,7 @@ def main():
     shuttle_arr = np.zeros((N, length, 2), dtype=np.float32)
     contact_arr = np.zeros((N, length, 1), dtype=np.float32)
     quality_arr = np.zeros((N, 4), dtype=np.float32)
+    valid_arr = np.zeros(N, dtype=np.bool_)
 
     t0 = time.time()
     extracted = 0
@@ -133,9 +142,10 @@ def main():
             shuttle_arr[idx] = s_seq
             contact_arr[idx] = cont_seq
             quality_arr[idx] = q_vec
+            valid_arr[idx] = True
             extracted += 1
         except Exception as e:
-            pass
+            print(f"  [WARN] Khong trich xuat duoc sample {sid}: {e}", flush=True)
 
         if (idx + 1) % 5000 == 0 or (idx + 1) == N:
             elapsed = time.time() - t0
@@ -150,6 +160,7 @@ def main():
         shuttle=shuttle_arr,
         contact_dist=contact_arr,
         quality=quality_arr,
+        valid=valid_arr,
         stroke=source_data["stroke"],
         side=source_data["side"],
         split=source_data["split"],

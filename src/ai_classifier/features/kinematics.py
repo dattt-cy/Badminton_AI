@@ -5,6 +5,31 @@ from __future__ import annotations
 import numpy as np
 
 
+def modality_quality_vector(pose: np.ndarray, shuttle: np.ndarray) -> np.ndarray:
+    """Compute the four quality features shared by training and inference."""
+    shuttle_missing = np.all(np.isclose(shuttle, 0.0), axis=-1)
+    shuttle_missing |= np.isnan(shuttle).any(axis=-1)
+    shuttle_speed = np.diff(shuttle, axis=0)
+    shuttle_speed_std = (
+        float(np.std(np.linalg.norm(shuttle_speed, axis=-1)))
+        if len(shuttle_speed) > 0
+        else 0.0
+    )
+
+    pose_flat = pose.reshape(len(pose), -1)
+    pose_missing_rate = float(np.mean(np.isclose(pose_flat, 0.0)))
+    pose_motion = float(np.mean(np.std(pose_flat, axis=0)))
+    return np.array(
+        [
+            float(np.mean(shuttle_missing)),
+            shuttle_speed_std,
+            pose_missing_rate,
+            pose_motion,
+        ],
+        dtype=np.float32,
+    )
+
+
 def resample(array: np.ndarray, length: int) -> np.ndarray:
     """Resample a 2D temporal sequence to a fixed length using linear interpolation."""
     values = np.nan_to_num(array.astype(np.float32), nan=0.0).reshape(len(array), -1)
