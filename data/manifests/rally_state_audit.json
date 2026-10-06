@@ -1,0 +1,65 @@
+{
+  "window_size": 32,
+  "live_stride": 24,
+  "nonlive_stride": 48,
+  "margin_buffer": 30,
+  "exclusion_buffer": 60,
+  "train": {
+    "matches": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "11",
+      "13",
+      "14",
+      "15",
+      "16",
+      "17",
+      "18",
+      "19",
+      "20",
+      "21",
+      "22",
+      "23",
+      "24",
+      "25",
+      "26",
+      "28",
+      "29",
+      "30",
+      "31",
+      "32",
+      "33",
+      "34"
+    ],
+    "total_samples": 20928,
+    "live_samples": 10428,
+    "nonlive_samples": 10500,
+    "live_ratio": 0.49827981651376146
+  },
+  "val": {
+    "matches": [
+      "35",
+      "36",
+      "37",
+      "38",
+      "41"
+    ],
+    "total_samples": 3500,
+    "live_samples": 1750,
+    "nonlive_samples": 1750,
+    "live_ratio": 0.5
+  },
+  "test_held_out": [
+    "39",
+    "40",
+    "42",
+    "43",
+    "44"
+  ]
+}
