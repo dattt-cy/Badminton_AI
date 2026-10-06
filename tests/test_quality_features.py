@@ -27,3 +27,8 @@ def test_modality_quality_vector_preserves_training_scale() -> None:
     assert quality[1] == np.float32(expected_speed_std)
     assert quality[2] == np.float32(1 / 6)
     assert quality[3] == np.float32(expected_pose_motion)
+
+
+if __name__ == "__main__":
+    test_modality_quality_vector_preserves_training_scale()
+    print("Quality features test passed!")

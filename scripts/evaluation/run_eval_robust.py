@@ -1,4 +1,4 @@
-"""Run Robust KAP + Top-2 reranker on hit detections from a video clip."""
+"""Evaluate the canonical direct Robust KAP pipeline on an annotated video."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts.inference.robust_aligned_video_pipeline import AlignedVideoPipeline
 from scripts.inference.auto_court_detection import detect_court_corners
+from ai_classifier.localization import HitEvent, two_stage_temporal_nms
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,15 +30,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--offset", type=int, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
-        "--reranker-checkpoint", type=Path,
-        default=Path("work_dirs/kap_top2_reranker_seed20260927/best.pth"),
+        "--kap-checkpoint", type=Path,
+        default=Path("work_dirs/kap_robust_seed20260926/kap_best.pth"),
     )
     parser.add_argument(
         "--pose-model", type=Path,
         default=Path("models/checkpoints/pose/yolov8x-pose.pt"),
     )
-    parser.add_argument("--specialist", type=Path, action="append", default=[])
     parser.add_argument("--tolerance", type=int, default=12)
+    parser.add_argument(
+        "--min-hit-score", type=float, default=0.0,
+        help="Optionally filter events from an existing scan JSON by score.",
+    )
+    parser.add_argument(
+        "--raw-threshold", type=float,
+        help="Rebuild events from raw_events at this threshold instead of using stored events.",
+    )
+    parser.add_argument("--raw-nms-radius", type=int, default=15)
+    parser.add_argument("--raw-same-side-nms-radius", type=int, default=18)
+    parser.add_argument(
+        "--contact-refine-radius", type=int, default=6,
+        help="Search +/- this many frames for a closer shuttle/wrist contact; use 0 to disable.",
+    )
+    parser.add_argument(
+        "--gate", type=Path, default=None,
+        help="Optional path to live segments gate JSON.",
+    )
+    parser.add_argument(
+        "--no-shared-cache", action="store_true",
+        help="Disable in-memory shared-pose precomputation (legacy slow path).",
+    )
     return parser.parse_args()
 
 
@@ -45,13 +67,33 @@ def main() -> None:
     args = parse_args()
     started = time.time()
     scan = json.loads(args.scan.read_text(encoding="utf-8"))
-    events = scan["events"]
+    if args.raw_threshold is not None:
+        if not scan.get("raw_events"):
+            raise ValueError("--raw-threshold requires raw_events in the scan JSON")
+        raw = [HitEvent(int(row["frame"]), row["side"], float(row["score"]))
+               for row in scan["raw_events"]]
+        events = [event.__dict__ for event in two_stage_temporal_nms(
+            raw, threshold=args.raw_threshold, radius=args.raw_nms_radius,
+            same_side_radius=args.raw_same_side_nms_radius,
+        )]
+    else:
+        events = [
+            event for event in scan["events"]
+            if float(event["score"]) >= args.min_hit_score
+        ]
+    if args.gate is not None:
+        from ai_classifier.localization.live_gate import frame_is_live
+        gate_payload = json.loads(args.gate.read_text(encoding="utf-8"))
+        live_segments = gate_payload.get("live_segments", [])
+        events = [e for e in events if frame_is_live(int(e["frame"]), live_segments)]
     gt = []
     with args.manifest.open(encoding="utf-8-sig", newline="") as handle:
         for row in csv.DictReader(handle):
-            name = Path(row["video_path"]).name
             absolute = int(row["hit_frame"])
-            if name.startswith(args.match_id + " ") and args.offset <= absolute < args.offset + 9000:
+            row_match_id = row.get("match_id", "")
+            name = Path(row["video_path"]).name
+            same_match = row_match_id == args.match_id or name.startswith(args.match_id + " ")
+            if same_match and args.offset <= absolute < args.offset + 9000:
                 gt.append({"frame": absolute - args.offset, "stroke": row["coarse_label"]})
     gt.sort(key=lambda row: row["frame"])
 
@@ -61,29 +103,31 @@ def main() -> None:
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     corners = detect_court_corners(str(args.video))
     pipeline = AlignedVideoPipeline(
-        reranker_path=args.reranker_checkpoint,
-        specialist_paths=args.specialist,
+        ckpt_path=args.kap_checkpoint,
         corners=corners, orig_w=width, orig_h=height,
         pose_model_path=args.pose_model,
     )
+    cache_stats = None
+    if not args.no_shared_cache:
+        cache_stats = pipeline.prepare_event_cache(
+            cap, [int(event["frame"]) for event in events], total_frames,
+            contact_refine_radius=args.contact_refine_radius,
+        )
     predictions = []
     for index, event in enumerate(events, 1):
         feature = pipeline.extract_features(
-            cap, int(event["frame"]), total_frames, hitter_side=event["side"]
+            cap, int(event["frame"]), total_frames, hitter_side=event["side"],
+            contact_refine_radius=args.contact_refine_radius,
         )
         if feature is None:
             continue
         detail = pipeline.predict_detailed(feature)
         predictions.append({
             "frame": int(event["frame"]), "hitter": event["side"],
+            "refined_frame": int(feature["hit_frame"]),
+            "contact_offset": int(feature["contact_offset"]),
             "hit_score": float(event["score"]), "stroke": detail["stroke"],
             "confidence": detail["confidence"], "top2": detail["top2"],
-            "base_stroke": detail["base_stroke"],
-            "base_confidence": detail["base_confidence"],
-            "reranker_swapped": detail["reranker_swapped"],
-            "swap_probability": detail["swap_probability"],
-            "specialist_applied": detail["specialist_applied"],
-            "specialist_probability": detail["specialist_probability"],
             "crop_box": list(feature["crop_box"]),
         })
         print(f"[{index}/{len(events)}] frame={event['frame']} {detail['stroke']} {detail['confidence']:.3f}", flush=True)
@@ -104,7 +148,6 @@ def main() -> None:
         used.add(idx)
         matches.append({
             "gt": truth, "prediction": pred, "frame_error": distance,
-            "base_top1": pred["base_stroke"] == truth["stroke"],
             "top1": pred["stroke"] == truth["stroke"],
             "top2": truth["stroke"] in pred["top2"],
         })
@@ -112,7 +155,6 @@ def main() -> None:
     matched = sum(item["prediction"] is not None for item in matches)
     top1 = sum(item["top1"] for item in matches)
     top2 = sum(item["top2"] for item in matches)
-    base_top1 = sum(item.get("base_top1", False) for item in matches)
     by_class = defaultdict(lambda: {"total": 0, "matched": 0, "top1": 0, "top2": 0})
     for item in matches:
         stats = by_class[item["gt"]["stroke"]]
@@ -122,17 +164,23 @@ def main() -> None:
         stats["top2"] += item["top2"]
     result = {
         "video": str(args.video.resolve()), "offset": args.offset,
+        "minimum_hit_score": args.min_hit_score,
+        "raw_threshold": args.raw_threshold,
+        "raw_nms_radius": args.raw_nms_radius if args.raw_threshold is not None else None,
+        "raw_same_side_nms_radius": (
+            args.raw_same_side_nms_radius if args.raw_threshold is not None else None
+        ),
+        "contact_refine_radius": args.contact_refine_radius,
+        "contact_refined_count": sum(row["contact_offset"] != 0 for row in predictions),
+        "gate": str(args.gate.resolve()) if args.gate is not None else None,
+        "shared_cache": cache_stats,
         "court_corners": corners.tolist(),
         "gt_count": len(gt), "candidate_count": len(events),
         "classified_count": len(predictions), "matched_count": matched,
         "hit_recall_at_tolerance": matched / len(gt),
         "end_to_end_top1": top1 / len(gt), "end_to_end_top2": top2 / len(gt),
-        "base_end_to_end_top1": base_top1 / len(gt),
         "conditional_top1": top1 / matched if matched else 0.0,
         "conditional_top2": top2 / matched if matched else 0.0,
-        "base_conditional_top1": base_top1 / matched if matched else 0.0,
-        "reranker_swap_count": sum(row["reranker_swapped"] for row in predictions),
-        "specialist_apply_count": sum(row["specialist_applied"] is not None for row in predictions),
         "runtime_seconds": time.time() - started,
         "per_class": dict(by_class), "predictions": predictions, "matches": matches,
     }
