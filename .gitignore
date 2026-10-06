@@ -68,7 +68,6 @@ data/iii-config.yaml
 external/BST-Badminton-Stroke-type-Transformer/
 external/TrackNetV3/
 external/BFMD/
-external/pyskl/
 
 # Python package build metadata
 *.egg-info/
