@@ -1,20 +1,17 @@
 # AI Classifier
 
-Pipeline nhận dạng kỹ thuật cầu lông từ video bằng mô hình KAP
-(Kinematics-Aware Perception). Hệ thống kết hợp RGB, pose, quỹ đạo cầu và
-thông tin thời điểm tiếp xúc để phân loại stroke và phía đánh.
+Pipeline nhận dạng kỹ thuật cầu lông từ video bằng Robust KAP
+(Kinematics-Aware Perception). Hệ thống kết hợp RGB, pose, vị trí sân, quỹ đạo
+cầu và thời điểm tiếp xúc để phát hiện và phân loại cú đánh.
 
-## Thành phần chính
+## Cấu trúc chính
 
-- `src/ai_classifier/`: model KAP, feature động học, pose và hit localization.
-- `scripts/inference/`: pipeline suy luận video đã căn chỉnh và bản robust.
-- `scripts/training/`: huấn luyện KAP, pair specialist và top-2 reranker.
-- `scripts/evaluation/`: đánh giá trên ShuttleSet và video thực tế.
-- `scripts/data/`: tạo manifest, cache và feature phục vụ huấn luyện.
-- `configs/`: cấu hình pose, taxonomy, dataset và biomechanics.
-- `data/manifests/`: metadata cần thiết để tái lập thí nghiệm; video/dataset
-  gốc không được lưu trong Git.
-- `models/`: chỉ giữ cấu trúc thư mục; checkpoint được lưu cục bộ.
+- `scripts/inference/run_video_pipeline.py`: entrypoint duy nhất cho video mới.
+- `scripts/inference/robust_aligned_video_pipeline.py`: trích đặc trưng và KAP.
+- `scripts/training/`: huấn luyện hit detector và Robust KAP.
+- `scripts/evaluation/`: đánh giá video có ground truth.
+- `src/ai_classifier/`: model và các module dùng chung.
+- `data/manifests/`: metadata phục vụ huấn luyện và đánh giá.
 
 ## Cài đặt
 
@@ -24,44 +21,34 @@ Yêu cầu Python 3.10 trở lên:
 python -m pip install -e ".[test]"
 ```
 
-Checkpoint, dataset, output và thư mục thí nghiệm đều được `.gitignore` loại
-khỏi repository.
+## Chạy video mới
 
-## Kiểm tra
+Pipeline tự quét hit, cache pose trong RAM và phân loại bằng direct Robust KAP:
 
 ```bash
+python scripts/inference/run_video_pipeline.py \
+  --video path/to/video.mp4 \
+  --output outputs/result.json
+```
+
+Cấu hình mặc định ưu tiên accuracy: hit threshold `0.50`, YOLOv8x-pose,
+contact refinement ±6 frame và không dùng reranker/specialist.
+
+## Huấn luyện
+
+```bash
+python scripts/training/train_shuttleset_hit_rgb_full.py --help
+python scripts/data/extract_sequence_features.py --help
+python scripts/training/train_kap_scratch.py --help
+```
+
+## Đánh giá và kiểm tra
+
+```bash
+python scripts/evaluation/run_eval_robust.py --help
+python scripts/evaluation/evaluate_kap_full_shuttleset_test.py --help
 python -m pytest -q
 ```
 
-## Huấn luyện KAP
-
-Trích xuất sequence feature rồi huấn luyện mô hình:
-
-```bash
-python scripts/data/extract_sequence_features.py
-python scripts/training/train_kap_scratch.py
-```
-
-Các bước reranking tùy chọn:
-
-```bash
-python scripts/training/train_pair_specialists.py
-python scripts/training/train_top2_reranker.py
-```
-
-## Suy luận và đánh giá
-
-Xem tham số cụ thể bằng `--help`:
-
-```bash
-python scripts/inference/robust_aligned_video_pipeline.py --help
-python scripts/evaluation/run_eval_robust.py --help
-python scripts/evaluation/evaluate_kap_full_shuttleset_test.py --help
-```
-
-Các file lớn cần giữ ngoài Git:
-
-- dataset và video trong `data/`;
-- checkpoint `.pt`, `.pth`, `.onnx` trong `models/` hoặc `work_dirs/`;
-- kết quả inference trong `outputs/`;
-- báo cáo và paper cục bộ trong `docs/`.
+Dataset, video, checkpoint và output lớn được giữ ngoài Git hoặc trong
+`work_dirs/`; không xóa chúng khi dọn source code.
