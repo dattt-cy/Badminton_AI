@@ -7,7 +7,7 @@ import numpy as np
 from pathlib import Path
 
 
-def _get_representative_frame(video_path: str, n_candidates: int = 5) -> np.ndarray:
+def _get_candidate_frames(video_path: str, n_candidates: int = 12) -> list[np.ndarray]:
     cap = cv2.VideoCapture(video_path)
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     frames = []
@@ -19,9 +19,12 @@ def _get_representative_frame(video_path: str, n_candidates: int = 5) -> np.ndar
     cap.release()
     if not frames:
         raise ValueError(f"Cannot read video: {video_path}")
-    # Pick the frame with the most green pixels (most of court visible)
-    best = max(frames, key=lambda f: _green_pixel_count(f))
-    return best
+    return frames
+
+
+def _get_representative_frame(video_path: str, n_candidates: int = 12) -> np.ndarray:
+    """Return the greenest sampled frame; retained for diagnostic callers."""
+    return max(_get_candidate_frames(video_path, n_candidates), key=_green_pixel_count)
 
 
 def _green_pixel_count(frame: np.ndarray) -> int:
@@ -135,22 +138,21 @@ def detect_court_corners(video_path: str) -> np.ndarray:
     Returns array of shape (4, 2): [BL, BR, TR, TL]
     Raises ValueError if detection fails.
     """
-    frame = _get_representative_frame(video_path)
-    mask = _detect_court_mask(frame)
+    candidates: list[tuple[int, np.ndarray]] = []
+    for frame in _get_candidate_frames(video_path):
+        mask = _detect_court_mask(frame)
+        if np.sum(mask > 0) / mask.size < 0.05:
+            continue
+        corners = _largest_contour_quad(mask, frame.shape)
+        if corners is not None and _validate_corners(corners, frame.shape):
+            candidates.append((_green_pixel_count(frame), _order_corners(corners)))
+            continue
+        corners = _hough_line_corners(frame, mask)
+        if corners is not None and _validate_corners(corners, frame.shape):
+            candidates.append((_green_pixel_count(frame), _order_corners(corners)))
 
-    green_ratio = np.sum(mask > 0) / mask.size
-    if green_ratio < 0.05:
-        raise ValueError("Court not detected: insufficient green area in frame")
-
-    # Try contour-based approach first
-    corners = _largest_contour_quad(mask, frame.shape)
-    if corners is not None and _validate_corners(corners, frame.shape):
-        return _order_corners(corners)
-
-    # Fallback to Hough lines
-    corners = _hough_line_corners(frame, mask)
-    if corners is not None and _validate_corners(corners, frame.shape):
-        return corners
+    if candidates:
+        return max(candidates, key=lambda item: item[0])[1]
 
     raise ValueError("Could not detect valid court corners automatically")
 
@@ -163,9 +165,24 @@ def _validate_corners(pts: np.ndarray, frame_shape: tuple) -> bool:
     # All points should be within frame bounds (with margin)
     if np.any(pts < -50) or np.any(pts[:, 0] > w + 50) or np.any(pts[:, 1] > h + 50):
         return False
-    # Area should be at least 5% of frame area
+    # Area should be at least 5% of frame area.
     area = cv2.contourArea(pts.astype(np.float32))
     if area < 0.05 * w * h:
+        return False
+    ordered = _order_corners(pts)
+    bl, br, tr, tl = ordered
+    # A broadcast singles court must span the image centre and have meaningful
+    # perspective depth. This rejects green scoreboards/replay graphics and
+    # half-court contours that can contain more green pixels than the court.
+    if min(bl[0], tl[0]) >= 0.5 * w or max(br[0], tr[0]) <= 0.5 * w:
+        return False
+    if max(pts[:, 1]) - min(pts[:, 1]) < 0.30 * h:
+        return False
+    if br[0] - bl[0] < 0.35 * w:
+        return False
+    bottom_width = float(np.linalg.norm(br - bl))
+    top_width = float(np.linalg.norm(tr - tl))
+    if top_width >= 0.80 * bottom_width:
         return False
     return True
 
@@ -206,4 +223,3 @@ if __name__ == "__main__":
     except ValueError as e:
         print(json.dumps({"error": str(e)}))
         sys.exit(1)
-
