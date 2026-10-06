@@ -33,7 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from ai_classifier.localization import HitEvent, temporal_nms  # noqa: E402
+from ai_classifier.localization import HitEvent, two_stage_temporal_nms  # noqa: E402
 
 CLASSES = ["no_hit", "upper_hit", "lower_hit"]
 
@@ -59,17 +59,15 @@ def load_model(checkpoint_path: Path) -> tuple[nn.Module, dict]:
 # ---------------------------------------------------------------------------
 
 def _preprocess_frames(frames: list[np.ndarray], n_frames: int) -> torch.Tensor:
-    """Convert a list of RGB uint8 HxWxC frames into a C,T,H,W float tensor."""
+    """Convert a list of RGB uint8 128x171x3 frames into a C,T,H,W float tensor 112x112."""
     while len(frames) < n_frames:
         frames.append(frames[-1])
-    arr = np.stack(frames[:n_frames])          # T,H,W,C uint8
-    tensor = torch.from_numpy(arr).permute(0, 3, 1, 2).float().div_(255.0)  # T,C,H,W
-    tensor = VF.resize(tensor, [128, 171], antialias=False)
-    tensor = VF.center_crop(tensor, [112, 112])
-    mean = _MEAN.view(1, 3, 1, 1)
-    std = _STD.view(1, 3, 1, 1)
-    tensor = (tensor - mean) / std
-    return tensor.permute(1, 0, 2, 3)  # C,T,H,W
+    arr = np.stack(frames[:n_frames])          # T,H,W,C uint8 (16, 128, 171, 3)
+    crop = arr[:, 8:120, 30:142, :]            # Center crop (16, 112, 112, 3)
+    tensor = torch.from_numpy(crop).permute(3, 0, 1, 2).float().div_(255.0)  # C,T,H,W
+    mean = _MEAN.view(3, 1, 1, 1)
+    std = _STD.view(3, 1, 1, 1)
+    return (tensor - mean) / std
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +85,8 @@ def scan_video(
     use_amp: bool,
     max_frames: int | None = None,
     start_frame: int = 0,
+    gate_path: Path | None = None,
+    gate_padding: int = 30,
 ) -> list[HitEvent]:
     """Produce one HitEvent per stride-th frame across the entire video.
 
@@ -116,6 +116,15 @@ def scan_video(
         f"~{effective_max // stride} evals",
         flush=True,
     )
+    gate_segments = None
+    if gate_path is not None and Path(gate_path).exists():
+        from ai_classifier.localization.live_gate import frame_is_live
+        gate_data = json.loads(Path(gate_path).read_text(encoding="utf-8"))
+        gate_segments = gate_data.get("live_segments", [])
+        print(
+            f"  [scan] Guided by Rally Gate: {len(gate_segments)} live segments (padding={gate_padding}f)",
+            flush=True,
+        )
 
     model.eval()
     events: list[HitEvent] = []
@@ -142,15 +151,15 @@ def scan_video(
         pending_clips.clear()
         pending_centers.clear()
 
-    # Decode once from left to right. The old implementation performed a
-    # random seek and decoded 16 frames for every candidate center.
+    # Decode once from left to right with single-pass resize
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
     frame_index = start_frame
     while frame_index < effective_max:
         ok, frame = cap.read()
         if not ok:
             break
-        frame_buffer.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        frame_small = cv2.resize(frame, (171, 128), interpolation=cv2.INTER_LINEAR)
+        frame_buffer.append(cv2.cvtColor(frame_small, cv2.COLOR_BGR2RGB))
         if len(frame_buffer) == n_frames:
             window_start = frame_index - n_frames + 1
             center = window_start + half
@@ -159,16 +168,16 @@ def scan_video(
                 and center < effective_max - half
                 and (center - first_center) % stride == 0
             ):
-                pending_clips.append(_preprocess_frames(list(frame_buffer), n_frames))
-                pending_centers.append(center)
-                if len(pending_clips) >= batch_size:
-                    flush_batch()
-                    if len(events) % 2000 < batch_size:
-                        print(
-                            f"  [scan-progress] {len(events)}/{expected_evals} "
-                            f"({100.0 * len(events) / max(expected_evals, 1):.1f}%)",
-                            flush=True,
-                        )
+                if gate_segments is None or frame_is_live(center, gate_segments, padding=gate_padding):
+                    pending_clips.append(_preprocess_frames(list(frame_buffer), n_frames))
+                    pending_centers.append(center)
+                    if len(pending_clips) >= batch_size:
+                        flush_batch()
+                        if len(events) % 1000 < batch_size:
+                            print(
+                                f"  [scan-progress] scored={len(events)} centers",
+                                flush=True,
+                            )
         frame_index += 1
     flush_batch()
     cap.release()
@@ -193,12 +202,18 @@ def parse_args() -> argparse.Namespace:
                         help="Clips per GPU batch.")
     parser.add_argument("--nms-radius", type=int, default=15,
                         help="Temporal NMS radius in frames.")
-    parser.add_argument("--threshold", type=float, default=0.5,
-                        help="Hit score threshold for NMS.")
+    parser.add_argument("--same-side-nms-radius", type=int, default=18,
+                        help="Second-stage duplicate radius for the same hitter side.")
+    parser.add_argument("--threshold", type=float, default=0.55,
+                        help="Hit score threshold for NMS (multi-match tuned default: 0.55).")
     parser.add_argument("--max-frames", type=int,
                         help="Process only first N frames (debugging).")
     parser.add_argument("--start-frame", type=int, default=0,
                         help="Skip this many frames at the beginning.")
+    parser.add_argument("--gate", type=Path, default=None,
+                        help="Path to Rally-State Gate JSON to scan only live rally segments.")
+    parser.add_argument("--gate-padding", type=int, default=30,
+                        help="Safety frame margin around live segments (default 30 frames = 1.0s).")
     parser.add_argument("--no-amp", action="store_true",
                         help="Disable automatic mixed precision.")
     return parser.parse_args()
@@ -223,9 +238,14 @@ def main() -> None:
         use_amp=use_amp,
         max_frames=args.max_frames,
         start_frame=args.start_frame,
+        gate_path=args.gate,
+        gate_padding=args.gate_padding,
     )
 
-    nms_events = temporal_nms(events, threshold=args.threshold, radius=args.nms_radius)
+    nms_events = two_stage_temporal_nms(
+        events, threshold=args.threshold, radius=args.nms_radius,
+        same_side_radius=args.same_side_nms_radius,
+    )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     result = {
@@ -233,6 +253,7 @@ def main() -> None:
         "video": str(args.video.resolve()),
         "stride": args.stride,
         "nms_radius": args.nms_radius,
+        "same_side_nms_radius": args.same_side_nms_radius,
         "threshold": args.threshold,
         "frames_scored": len(events),
         "candidate_count": len(nms_events),

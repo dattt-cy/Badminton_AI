@@ -40,6 +40,21 @@ def temporal_nms(
     return sorted(kept, key=lambda event: event.frame)
 
 
+def two_stage_temporal_nms(
+    events: Sequence[HitEvent], *, threshold: float, radius: int,
+    same_side_radius: int,
+) -> list[HitEvent]:
+    """Apply ordinary NMS, then suppress slower duplicate peaks per hitter.
+
+    The second pass never suppresses nearby events from opposite court sides,
+    preserving legitimate fast exchanges while removing same-player echoes.
+    """
+    first = temporal_nms(events, threshold=threshold, radius=radius)
+    return temporal_nms(
+        first, threshold=0.0, radius=same_side_radius, side_aware=True
+    )
+
+
 def temporal_grouping(
     events: Sequence[HitEvent], *, threshold: float, max_gap: int, max_span: int
 ) -> list[HitEvent]:
