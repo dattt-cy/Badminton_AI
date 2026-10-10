@@ -1,0 +1,268 @@
+"""Derive CoachAI-style stroke metadata from existing pipeline features.
+
+Landing coordinates are explicitly reported as trajectory proxies. A monocular
+broadcast view cannot recover the true 3-D shuttle landing point without a
+dedicated estimator, especially while the shuttle is airborne.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import numpy as np
+
+
+ATTACK_STROKES = {"smash", "net_attack", "drive"}
+DEFENCE_STROKES = {"lift", "clear"}
+
+
+def court_area(point: np.ndarray | None, rows: int = 3, columns: int = 3) -> int | None:
+    """Return a one-based court grid area, or None for invalid projections."""
+    if point is None or len(point) != 2 or not np.isfinite(point).all():
+        return None
+    x, y = float(point[0]), float(point[1])
+    if not (-0.05 <= x <= 1.05 and -0.05 <= y <= 1.05):
+        return None
+    x, y = np.clip([x, y], 0.0, 1.0)
+    column = min(int(x * columns), columns - 1)
+    row = min(int(y * rows), rows - 1)
+    return row * columns + column + 1
+
+
+def _point(value: np.ndarray | None) -> list[float] | None:
+    if value is None or not np.isfinite(value).all():
+        return None
+    return [round(float(value[0]), 5), round(float(value[1]), 5)]
+
+
+def _court_point(value: np.ndarray | None) -> list[float] | None:
+    if value is None or court_area(value) is None:
+        return None
+    return _point(np.clip(value, 0.0, 1.0))
+
+
+def _mean_speed(points: np.ndarray, valid: np.ndarray, fps: float) -> float | None:
+    pair_valid = valid[:-1] & valid[1:]
+    if not np.any(pair_valid) or fps <= 0:
+        return None
+    distances = np.linalg.norm(np.diff(points, axis=0), axis=1)[pair_valid]
+    return round(float(distances.mean() * fps), 5)
+
+
+def build_stroke_analytics(
+    context: dict[str, Any],
+    *,
+    stroke: str,
+    fps: float,
+    next_hit_frame: int | None = None,
+) -> dict[str, Any]:
+    """Build serializable analytics without changing classifier inputs."""
+    frames = np.asarray(context["frame_indices"], dtype=np.int64)
+    shuttle_image = np.asarray(context["shuttle_image"], dtype=np.float32)
+    shuttle_court = np.asarray(context["shuttle_court"], dtype=np.float32)
+    player_court = np.asarray(context["player_court"], dtype=np.float32)
+    opponent_court = np.asarray(context["opponent_court"], dtype=np.float32)
+    wrists = np.asarray(context["hitter_wrists"], dtype=np.float32)
+    contact = int(context["contact_index"])
+    shuttle_valid = np.any(shuttle_image != 0.0, axis=1)
+    wrist_valid = np.any(wrists != 0.0, axis=1)
+
+    contact_shuttle = shuttle_court[contact] if shuttle_valid[contact] else None
+    contact_image = shuttle_image[contact] if shuttle_valid[contact] else None
+    hit_player = player_court[contact] if np.any(player_court[contact] != 0.0) else None
+    hit_opponent = (
+        opponent_court[contact] if np.any(opponent_court[contact] != 0.0) else None
+    )
+
+    post = np.arange(contact + 2, len(frames))
+    if next_hit_frame is not None:
+        before_next = post[frames[post] <= next_hit_frame - 2]
+        if len(before_next):
+            post = before_next
+    projected_inside = (
+        np.isfinite(shuttle_court).all(axis=1)
+        & (shuttle_court[:, 0] >= 0.0) & (shuttle_court[:, 0] <= 1.0)
+        & (shuttle_court[:, 1] >= 0.0) & (shuttle_court[:, 1] <= 1.0)
+    )
+    candidates = (
+        post[shuttle_valid[post] & projected_inside[post]]
+        if len(post) else np.asarray([], dtype=int)
+    )
+    landing_index = int(candidates[-1]) if len(candidates) else None
+    landing = shuttle_court[landing_index] if landing_index is not None else None
+    landing_frame = int(frames[landing_index]) if landing_index is not None else None
+
+    post_slice = slice(contact, (landing_index + 1) if landing_index is not None else len(frames))
+    visibility = shuttle_valid[post_slice]
+    visibility_ratio = float(visibility.mean()) if len(visibility) else 0.0
+    if next_hit_frame is not None and landing_frame is not None:
+        proximity = max(0.0, 1.0 - abs((next_hit_frame - 2) - landing_frame) / 30.0)
+    else:
+        proximity = 0.35 if landing_frame is not None else 0.0
+    # This remains a monocular 2-D projection, so never report ground-truth-like
+    # confidence even when tracking visibility is perfect.
+    landing_confidence = round(0.65 * visibility_ratio * proximity, 4)
+
+    flight_time = None
+    if next_hit_frame is not None and fps > 0:
+        flight_time = round(max(0.0, (next_hit_frame - int(frames[contact])) / fps), 4)
+
+    attack_state = (
+        "attacking" if stroke in ATTACK_STROKES
+        else "defensive" if stroke in DEFENCE_STROKES
+        else "neutral"
+    )
+    return {
+        "player_position_court": _court_point(hit_player),
+        "opponent_position_court": _court_point(hit_opponent),
+        "contact_shuttle_projection_court": _point(contact_shuttle),
+        "contact_height_image_ratio": (
+            round(1.0 - float(contact_image[1]), 5) if contact_image is not None else None
+        ),
+        "hitting_area_3x3": court_area(hit_player),
+        "landing_position_court_proxy": _court_point(landing),
+        "landing_area_3x3_proxy": court_area(landing),
+        "landing_proxy_frame": landing_frame,
+        "landing_proxy_confidence": landing_confidence,
+        "flight_time_to_next_hit_seconds": flight_time,
+        "average_shuttle_speed_image_per_second": _mean_speed(
+            shuttle_image[post_slice], shuttle_valid[post_slice], fps
+        ),
+        "average_wrist_speed_image_per_second": _mean_speed(
+            wrists, wrist_valid, fps
+        ),
+        "shuttle_visibility_ratio": round(visibility_ratio, 4),
+        "attack_state_rule": attack_state,
+        "landing_is_proxy": True,
+    }
+
+
+def predict_rally_boundary(
+    prev_prediction: dict[str, Any] | None,
+    curr_prediction: dict[str, Any],
+    fps: float,
+    model: Any = None,
+    max_gap_seconds: float = 5.0,
+) -> bool:
+    """Predict whether curr_prediction starts a new rally (True) or continues same rally (False)."""
+    if prev_prediction is None:
+        return True
+    
+    prev_frame = int(prev_prediction.get("refined_frame", prev_prediction.get("frame", 0)))
+    curr_frame = int(curr_prediction.get("refined_frame", curr_prediction.get("frame", 0)))
+    gap = max((curr_frame - prev_frame) / fps, 0.0) if fps > 0 else 0.0
+    
+    curr_stroke = curr_prediction.get("stroke", "")
+
+    # A detected serve is the strongest observable boundary cue. Conversely, a
+    # non-serve after a short gap is much more likely to be a slow/high return
+    # than a new rally. Keep this guard in front of the learned model because
+    # noisy stroke labels made the model split long rallies in production.
+    if curr_stroke == "serve":
+        return True
+    if gap <= max_gap_seconds:
+        return False
+
+    # Fast path: ML model evaluation if available
+    if model is not None and hasattr(model, "predict"):
+        stroke2idx = {
+            "clear": 0, "drive": 1, "drop": 2, "lift": 3,
+            "net_attack": 4, "net_shot": 5, "serve": 6, "smash": 7,
+        }
+        prev_stroke = prev_prediction.get("stroke", "")
+        same_side = 1.0 if curr_prediction.get("hitter") == prev_prediction.get("hitter") else 0.0
+        curr_is_serve = 1.0 if curr_stroke == "serve" else 0.0
+        prev_is_serve = 1.0 if prev_stroke == "serve" else 0.0
+        curr_s_idx = float(stroke2idx.get(curr_stroke, -1))
+        prev_s_idx = float(stroke2idx.get(prev_stroke, -1))
+        
+        feat = np.array([[
+            gap,
+            float(np.log(max(gap, 0.01))),
+            same_side,
+            curr_is_serve,
+            prev_is_serve,
+            curr_s_idx,
+            prev_s_idx,
+        ]], dtype=np.float32)
+        return bool(model.predict(feat)[0] == 1)
+
+    # Robust rule fallback
+    return gap > max_gap_seconds
+
+
+def assign_rallies(
+    predictions: list[dict[str, Any]],
+    fps: float,
+    max_gap_seconds: float = 3.0,
+    model: Any = None,
+    prune_echoes: bool = True,
+) -> list[dict[str, Any]]:
+    """Add rally and ball-round identifiers using ML boundary detector or temporal gaps."""
+    rally = 0
+    ball_round = 0
+    previous_prediction: dict[str, Any] | None = None
+    for prediction in predictions:
+        frame = int(prediction.get("refined_frame", prediction.get("frame", 0)))
+        prev_frame = (
+            int(previous_prediction.get("refined_frame", previous_prediction.get("frame", 0)))
+            if previous_prediction is not None
+            else None
+        )
+        gap = (frame - prev_frame) / fps if prev_frame is not None and fps > 0 else None
+        
+        new_rally = predict_rally_boundary(
+            previous_prediction,
+            prediction,
+            fps=fps,
+            model=model,
+            max_gap_seconds=max_gap_seconds,
+        )
+        if new_rally:
+            rally += 1
+            ball_round = 1
+        else:
+            ball_round += 1
+        prediction["rally"] = rally
+        prediction["ball_round"] = ball_round
+        prediction["gap_from_previous_hit_seconds"] = (
+            round(gap, 4) if gap is not None else None
+        )
+        previous_prediction = prediction
+
+    if prune_echoes and predictions:
+        prune_pseudo_rallies(predictions, fps=fps)
+
+    return predictions
+
+
+def prune_pseudo_rallies(
+    predictions: list[dict[str, Any]],
+    fps: float = 30.0,
+    max_echo_gap_seconds: float = 2.5,
+) -> int:
+    """Merge echo single-hit rallies occurring immediately after a rally."""
+    if not predictions:
+        return 0
+    rally_groups: dict[int, list[dict[str, Any]]] = {}
+    for p in predictions:
+        rally_groups.setdefault(p["rally"], []).append(p)
+
+    sorted_rallies = sorted(rally_groups.keys())
+    for idx, r_idx in enumerate(sorted_rallies):
+        if idx == 0:
+            continue
+        shots = rally_groups[r_idx]
+        if len(shots) == 1:
+            prev_shots = rally_groups[sorted_rallies[idx - 1]]
+            gap = (shots[0].get("frame", 0) - prev_shots[-1].get("frame", 0)) / fps if fps > 0 else 999.0
+            if gap <= max_echo_gap_seconds:
+                shots[0]["rally"] = prev_shots[-1]["rally"]
+                prev_shots.append(shots[0])
+
+    unique_rallies = sorted(set(p["rally"] for p in predictions))
+    mapping = {old_r: new_r for new_r, old_r in enumerate(unique_rallies, 1)}
+    for p in predictions:
+        p["rally"] = mapping[p["rally"]]
+    return len(mapping)
+
