@@ -18,7 +18,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+api = [
+    'fastapi>=0.115,<1',
+    'python-multipart>=0.0.20',
+    'uvicorn[standard]>=0.34',
+]
+ocr = [
+    'easyocr>=1.7',
+]
 test = [
+    'httpx>=0.28',
     'pytest>=8.0',
 ]
 
