@@ -100,7 +100,7 @@ def inpaint_shuttle_trajectory(raw_shuttle: np.ndarray, max_gap: int = 6) -> np.
 class AlignedVideoPipeline:
     def __init__(
         self,
-        ckpt_path: str | Path = "work_dirs/kap_robust_seed20260926/kap_best.pth",
+        ckpt_path: str | Path = "work_dirs/kap_online_balanced_selection_20261008/best.pth",
         corners: np.ndarray | None = None,
         orig_w: int = 1280,
         orig_h: int = 720,
@@ -124,7 +124,10 @@ class AlignedVideoPipeline:
 
         print("[*] Loading R(2+1)D Visual Backbone...")
         self.rgb_model = MultiTaskR2Plus1D().to(DEVICE)
-        rgb_ckpt = torch.load("work_dirs/r2plus1d18_mixed_shuttleset_finebadminton/best.pth", map_location="cpu", weights_only=False)
+        backbone_ckpt = Path("src/ai_classifier/models/checkpoints/visual_backbone.pth")
+        if not backbone_ckpt.exists():
+            backbone_ckpt = Path("work_dirs/r2plus1d18_mixed_shuttleset_finebadminton/best.pth")
+        rgb_ckpt = torch.load(str(backbone_ckpt), map_location="cpu", weights_only=False)
         self.rgb_model.load_state_dict(rgb_ckpt["model"], strict=False)
         self.rgb_model.eval()
 
@@ -377,7 +380,18 @@ class AlignedVideoPipeline:
         raw_pose = raw_pose[window_start:window_stop]
         raw_shuttle = raw_shuttle[window_start:window_stop]
         selected_wrists = selected_wrists[window_start:window_stop]
+        analytics_frames = frame_indices[window_start:window_stop]
         contact_index = refined_contact - window_start
+
+        shuttle_pixels = raw_shuttle * np.asarray(
+            [self.orig_w, self.orig_h], dtype=np.float32
+        )
+        shuttle_court = cv2.perspectiveTransform(
+            shuttle_pixels[:, None, :].astype(np.float32), self.h_mat
+        )[:, 0, :]
+        shuttle_court[~np.any(raw_shuttle != 0.0, axis=1)] = np.nan
+        player_offset = 0 if hitter_side == "upper" else 2
+        opponent_offset = 2 if hitter_side == "upper" else 0
 
         # 3. Resample to 32 frames (Contact at index 10)
         s_p = resample(raw_court, 32)
@@ -435,16 +449,28 @@ class AlignedVideoPipeline:
             "s_c": torch.from_numpy(s_c).unsqueeze(0),
             "s_q": torch.from_numpy(s_q).unsqueeze(0),
             "crop_box": crop_box,
+            "analytics_context": {
+                "frame_indices": analytics_frames,
+                "contact_index": contact_index,
+                "shuttle_image": raw_shuttle,
+                "shuttle_court": shuttle_court,
+                "player_court": raw_court[:, player_offset:player_offset + 2],
+                "opponent_court": raw_court[:, opponent_offset:opponent_offset + 2],
+                "hitter_wrists": selected_wrists,
+            },
         }
 
-    def predict_detailed(self, feat: dict) -> dict:
+    def predict_detailed(
+        self, feat: dict, classifier: KAPScratchModel | None = None
+    ) -> dict:
+        model = classifier if classifier is not None else self.clf
         with torch.no_grad():
             inputs = (
                 feat["emb"].to(DEVICE), feat["s_j"].to(DEVICE),
                 feat["s_p"].to(DEVICE), feat["s_s"].to(DEVICE),
                 feat["s_c"].to(DEVICE), feat["s_q"].to(DEVICE),
             )
-            logits, _side_logits, _gates = self.clf(*inputs)
+            logits, _side_logits, _gates = model(*inputs)
         probs = F.softmax(logits, dim=-1)[0]
         pred_idx = int(logits.argmax(dim=-1).item())
         top2_idx = logits.topk(2, dim=-1).indices[0].tolist()
@@ -456,3 +482,56 @@ class AlignedVideoPipeline:
     def predict(self, feat: dict) -> tuple[str, float, list[str], torch.Tensor]:
         result = self.predict_detailed(feat)
         return result["stroke"], result["confidence"], result["top2"], result["logits"]
+
+    def predict_detailed_tta(
+        self,
+        cap: cv2.VideoCapture,
+        frame: int,
+        total_frames: int,
+        hitter_side: str,
+        contact_refine_radius: int = 6,
+        offsets: tuple[int, ...] = (-2, 0, 2),
+        classifier: KAPScratchModel | None = None,
+    ) -> tuple[dict | None, dict | None]:
+        """Temporal Test-Time Augmentation (TTA) multi-window soft-voting.
+
+        Evaluates multiple temporal shifts around candidate hit frame to smooth out
+        contact frame jitter and maximize generalization accuracy.
+        """
+        base_feature: dict | None = None
+        probs_list: list[torch.Tensor] = []
+
+        for offset in offsets:
+            shifted_frame = int(frame + offset)
+            if shifted_frame < 0 or shifted_frame >= total_frames:
+                continue
+            feat = self.extract_features(
+                cap,
+                shifted_frame,
+                total_frames,
+                hitter_side=hitter_side,
+                contact_refine_radius=contact_refine_radius,
+            )
+            if feat is None:
+                continue
+            if offset == 0 or base_feature is None:
+                base_feature = feat
+            detail = self.predict_detailed(feat, classifier=classifier)
+            probs = F.softmax(detail["logits"], dim=-1)
+            probs_list.append(probs)
+
+        if not probs_list or base_feature is None:
+            return None, None
+
+        avg_probs = torch.stack(probs_list).mean(dim=0)
+        pred_idx = int(avg_probs.argmax().item())
+        top2_idx = avg_probs.topk(2).indices.tolist()
+
+        detail_tta = {
+            "stroke": STROKE_CLASSES[pred_idx],
+            "confidence": float(avg_probs[pred_idx].item()),
+            "top2": [STROKE_CLASSES[k] for k in top2_idx],
+            "logits": torch.log(avg_probs.clamp_min(1e-7)),
+        }
+        return base_feature, detail_tta
+

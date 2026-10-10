@@ -200,12 +200,12 @@ def parse_args() -> argparse.Namespace:
                         help="Evaluate every N-th frame. Lower = denser (default 4).")
     parser.add_argument("--batch-size", type=int, default=8,
                         help="Clips per GPU batch.")
-    parser.add_argument("--nms-radius", type=int, default=15,
+    parser.add_argument("--nms-radius", type=int, default=8,
                         help="Temporal NMS radius in frames.")
-    parser.add_argument("--same-side-nms-radius", type=int, default=18,
+    parser.add_argument("--same-side-nms-radius", type=int, default=15,
                         help="Second-stage duplicate radius for the same hitter side.")
-    parser.add_argument("--threshold", type=float, default=0.55,
-                        help="Hit score threshold for NMS (multi-match tuned default: 0.55).")
+    parser.add_argument("--threshold", type=float, default=0.75,
+                        help="Hit score threshold for NMS (train-matches tuned default: 0.75).")
     parser.add_argument("--max-frames", type=int,
                         help="Process only first N frames (debugging).")
     parser.add_argument("--start-frame", type=int, default=0,
