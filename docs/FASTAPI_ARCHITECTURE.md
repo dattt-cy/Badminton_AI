@@ -1,72 +1,139 @@
-# FastAPI architecture
+# Kiến trúc FastAPI
 
-## Mục tiêu
+Contract response và JSON mẫu dành cho frontend nằm tại
+[`API_RESPONSE_CONTRACT.md`](API_RESPONSE_CONTRACT.md).
 
-API biến pipeline phân tích video hiện có thành một contract ổn định cho frontend.
-Xử lý AI không nằm trong router và không giữ request upload mở đến khi hoàn tất.
+## 1. Mục tiêu
 
-Luồng request:
+API cung cấp contract ổn định cho frontend mà không trộn HTTP với pipeline AI.
+Video được xử lý theo mô hình job vì inference có thể chạy lâu và sử dụng GPU.
 
 ```text
-Frontend -> POST /api/v1/analyses -> 202 + job id
+Frontend -> POST /api/v1/analyses -> 202 + job_id
                                       |
                                       v
-                            queue một worker (GPU)
+                              queue một GPU worker
                                       |
-Frontend -> GET /api/v1/analyses/{id} +-- queued/processing/completed/failed
+Frontend -> GET /api/v1/analyses/{job_id} -> trạng thái
                                       |
-Frontend -> GET /api/v1/analyses/{id}/result
+Frontend -> GET từng tài nguyên summary/strokes/rallies/...
 ```
 
-## Tổ chức source
+## 2. Cấu trúc thư mục
+
+Mỗi chức năng có router và response schema riêng. Router không xử lý nghiệp vụ;
+service không phụ thuộc FastAPI.
 
 ```text
 src/ai_classifier/api/
-├── main.py                 # app factory, lifespan, middleware, ghép router
-├── dependencies.py         # dependency injection cho router
+├── main.py                         # app factory, middleware, ghép router
+├── dependencies.py                 # dependency injection
 ├── core/
-│   └── config.py           # cấu hình từ environment
+│   ├── config.py                   # environment settings
+│   └── exception_handlers.py       # HTTP error mapping tập trung
+├── services/
+│   ├── analysis_jobs.py            # tạo/xóa job, upload, queue pipeline
+│   └── result_queries.py           # đọc, lọc, phân trang kết quả
 ├── routers/
-│   ├── health.py           # HTTP transport cho health check
-│   └── analyses.py         # HTTP transport cho analysis jobs
-├── schemas/
-│   └── analysis.py         # request/response contract (Pydantic)
-└── services/
-    └── analysis_jobs.py    # use case, lưu job và gọi AI pipeline
+│   ├── health.py                   # health check
+│   ├── analyses.py                 # tạo, xem trạng thái, xóa job
+│   ├── results.py                  # toàn bộ pipeline result
+│   ├── video.py                    # metadata video
+│   ├── summary.py                  # thống kê tổng quan
+│   ├── reliability.py              # độ tin cậy và giới hạn dữ liệu
+│   ├── strokes.py                  # cú đánh, filter, pagination
+│   ├── rallies.py                  # danh sách rally
+│   ├── scoreboard.py               # tỷ số ước lượng
+│   ├── scoreboard_ocr.py           # kết quả đọc bảng điểm OCR
+│   ├── tactical_patterns.py        # chuỗi và pattern chiến thuật
+│   ├── structured_tactics.py       # chiến thuật CoachAI có cấu trúc
+│   ├── movement.py                 # di chuyển người chơi
+│   ├── court.py                    # phân bố trên sân 3x3
+│   ├── players.py                  # hồ sơ người chơi
+│   ├── radar.py                    # dữ liệu radar chart
+│   ├── transitions.py              # ma trận phản hồi cú đánh
+│   ├── insights.py                 # nhận xét coaching
+│   └── timing.py                   # thời gian xử lý pipeline
+└── schemas/
+    ├── job.py
+    ├── result.py
+    ├── health.py
+    ├── video.py
+    ├── summary.py
+    ├── reliability.py
+    ├── stroke.py
+    ├── rally.py
+    ├── scoreboard.py
+    ├── scoreboard_ocr.py
+    ├── tactical_patterns.py
+    ├── structured_tactics.py
+    ├── movement.py
+    ├── court.py
+    ├── player.py
+    ├── radar.py
+    ├── transition.py
+    ├── insight.py
+    └── timing.py
 ```
 
 Quy tắc phụ thuộc:
 
-- `router` chỉ xử lý HTTP: parse input, status code và response.
-- `schema` là contract chia sẻ với frontend, không chứa xử lý AI.
-- `service` điều phối use case và có thể được gọi ngoài HTTP hoặc thay thế khi test.
-- pipeline/domain hiện hữu không import FastAPI; vì vậy model vẫn chạy được từ CLI.
-- `main.py` là composition root: nơi khởi tạo và nối các thành phần.
-
-Không cần tạo repository/controller cho mọi thứ. Chỉ tách thêm tầng khi có database,
-authentication hoặc nhiều implementation thật sự.
-
-## Chạy local
-
-```bash
-uv sync --extra api --extra test
-uv run uvicorn ai_classifier.api.main:app --reload
+```text
+router -> schema + service
+service -> pipeline/domain
+pipeline/domain -X-> FastAPI
+main -> khởi tạo và ghép tất cả thành phần
 ```
 
-- Swagger UI: `http://127.0.0.1:8000/docs`
-- OpenAPI JSON: `http://127.0.0.1:8000/openapi.json`
-- Health check: `http://127.0.0.1:8000/health`
+## 3. Danh sách API
 
-Frontend local mặc định được phép chạy từ `http://localhost:3000` hoặc
-`http://localhost:5173`. Có thể cấu hình bằng danh sách phân cách bởi dấu phẩy:
+### Hệ thống và job
 
-```powershell
-$env:AI_CLASSIFIER_CORS_ORIGINS='https://app.example.com,http://localhost:5173'
-```
+| Method | Endpoint | Chức năng |
+|---|---|---|
+| `GET` | `/health` | Kiểm tra API còn hoạt động |
+| `POST` | `/api/v1/analyses` | Upload video và tạo job |
+| `GET` | `/api/v1/analyses/{job_id}` | Xem trạng thái job |
+| `DELETE` | `/api/v1/analyses/{job_id}` | Xóa job không đang xử lý |
+| `GET` | `/api/v1/analyses/{job_id}/result` | Lấy toàn bộ JSON gốc |
 
-## Contract cho frontend
+### Metadata và thống kê
 
-Tạo job bằng `multipart/form-data`:
+| Method | Endpoint | Chức năng |
+|---|---|---|
+| `GET` | `/api/v1/analyses/{job_id}/video` | Video, người chơi, schema version |
+| `GET` | `/api/v1/analyses/{job_id}/summary` | Tổng số hit/rally và thống kê chung |
+| `GET` | `/api/v1/analyses/{job_id}/reliability` | Cờ ước lượng và chất lượng dữ liệu |
+| `GET` | `/api/v1/analyses/{job_id}/timing` | Thời gian từng bước pipeline |
+
+### Cú đánh và rally
+
+| Method | Endpoint | Chức năng |
+|---|---|---|
+| `GET` | `/api/v1/analyses/{job_id}/strokes` | Danh sách cú đánh có pagination/filter |
+| `GET` | `/api/v1/analyses/{job_id}/rallies` | Danh sách rally và người thắng |
+| `GET` | `/api/v1/analyses/{job_id}/scoreboard` | Bảng điểm ước lượng |
+| `GET` | `/api/v1/analyses/{job_id}/scoreboard-ocr` | Kết quả OCR bảng điểm |
+
+### Phân tích chiến thuật
+
+| Method | Endpoint | Chức năng |
+|---|---|---|
+| `GET` | `/api/v1/analyses/{job_id}/tactical-patterns` | Transition, sequence, winning combination |
+| `GET` | `/api/v1/analyses/{job_id}/structured-tactics` | Chiến thuật CoachAI có cấu trúc |
+| `GET` | `/api/v1/analyses/{job_id}/movement` | Quãng đường và chuyển động |
+| `GET` | `/api/v1/analyses/{job_id}/court-distribution` | Phân bố vị trí sân 3x3 |
+| `GET` | `/api/v1/analyses/{job_id}/players` | Profile từng người chơi |
+| `GET` | `/api/v1/analyses/{job_id}/insights` | Nhận xét dành cho huấn luyện |
+
+### Dữ liệu biểu đồ
+
+| Method | Endpoint | Chức năng |
+|---|---|---|
+| `GET` | `/api/v1/analyses/{job_id}/charts/radar` | Dữ liệu radar chart |
+| `GET` | `/api/v1/analyses/{job_id}/charts/transitions` | Ma trận phản hồi cú đánh |
+
+## 4. Upload và theo dõi job
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/analyses \
@@ -75,7 +142,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/analyses \
   -F "player_lower=Bob"
 ```
 
-Response `202 Accepted`:
+API trả `202 Accepted`:
 
 ```json
 {
@@ -91,53 +158,57 @@ Response `202 Accepted`:
 }
 ```
 
-Frontend polling `GET /api/v1/analyses/{id}` cho đến khi:
+Frontend polling `GET /api/v1/analyses/{job_id}`. Khi `status=completed`, frontend
+có thể gọi từng endpoint dữ liệu. Khi `status=failed`, hiển thị trường `error`.
 
-- `completed`: gọi URL trong `result_url`.
-- `failed`: hiển thị trường `error`.
-- `queued` hoặc `processing`: chờ 1-3 giây rồi gọi lại.
+## 5. Filter và pagination strokes
 
-Ví dụ TypeScript tối giản:
-
-```ts
-const body = new FormData();
-body.append("video", file);
-body.append("player_upper", "Alice");
-body.append("player_lower", "Bob");
-
-const job = await fetch(`${API_URL}/api/v1/analyses`, {
-  method: "POST",
-  body,
-}).then((response) => response.json());
-
-while (true) {
-  const current = await fetch(
-    `${API_URL}/api/v1/analyses/${job.id}`,
-  ).then((response) => response.json());
-  if (current.status === "failed") throw new Error(current.error);
-  if (current.status === "completed") {
-    const result = await fetch(`${API_URL}${current.result_url}`).then(
-      (response) => response.json(),
-    );
-    break;
-  }
-  await new Promise((resolve) => setTimeout(resolve, 2000));
-}
+```http
+GET /api/v1/analyses/{job_id}/strokes?page=1&page_size=20
+GET /api/v1/analyses/{job_id}/strokes?player=upper
+GET /api/v1/analyses/{job_id}/strokes?stroke=smash&rally=3
+GET /api/v1/analyses/{job_id}/strokes?min_confidence=0.8
 ```
 
-## Khi đưa lên production
+| Parameter | Giá trị |
+|---|---|
+| `page` | Số trang, bắt đầu từ 1 |
+| `page_size` | 1-100 item |
+| `player` | `upper` hoặc `lower` |
+| `stroke` | Tên cú đánh chính xác |
+| `rally` | Rally ID |
+| `min_confidence` | Từ 0 đến 1 |
 
-Implementation hiện tại phù hợp cho một API process và một GPU: metadata/result lưu
-trên disk, executor có đúng một worker. Không chạy nhiều Uvicorn worker vì mỗi process
-sẽ có queue riêng và có thể cùng chiếm GPU.
+Response chứa `items`, `page`, `page_size`, `total`, `total_pages` và `filters`.
 
-Khi cần scale, giữ nguyên router và schema, thay `AnalysisJobService` bằng:
+## 6. Chạy local
 
-- Redis/RabbitMQ + Celery/RQ/Dramatiq cho durable queue;
+```bash
+uv sync --extra api --extra test
+uv run uvicorn ai_classifier.api.main:app --reload
+```
+
+- Swagger UI: `http://127.0.0.1:8000/docs`
+- OpenAPI JSON: `http://127.0.0.1:8000/openapi.json`
+- Health check: `http://127.0.0.1:8000/health`
+
+CORS local mặc định cho phép `http://localhost:3000` và
+`http://localhost:5173`. Cấu hình production:
+
+```powershell
+$env:AI_CLASSIFIER_CORS_ORIGINS='https://app.example.com,http://localhost:5173'
+```
+
+## 7. Production
+
+Implementation hiện tại dành cho một API process và một GPU: metadata/result lưu
+trên disk, executor có một worker. Không chạy nhiều Uvicorn worker vì mỗi process có
+queue riêng và có thể cùng chiếm GPU.
+
+Khi scale, giữ nguyên router/schema và thay service infrastructure:
+
+- Redis/RabbitMQ cùng Celery, RQ hoặc Dramatiq cho durable queue;
 - PostgreSQL cho job metadata;
 - S3/MinIO cho video và result;
 - WebSocket hoặc Server-Sent Events nếu muốn thay polling;
-- auth, rate limit và kiểm tra MIME/signature trước khi public Internet.
-
-FastAPI `BackgroundTasks` hợp với tác vụ nhỏ chạy trong cùng process. Pipeline GPU dài
-nên queue chuyên dụng là đích đến phù hợp khi triển khai nhiều máy.
+- authentication, rate limit và kiểm tra MIME/signature trước public Internet.
