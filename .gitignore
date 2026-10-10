@@ -68,6 +68,9 @@ data/iii-config.yaml
 external/BST-Badminton-Stroke-type-Transformer/
 external/TrackNetV3/
 external/BFMD/
+external/CoachAI-Projects/
+external/CoachAI-Plus/
+external/badminton-analysis-system/
 
 # Python package build metadata
 *.egg-info/
