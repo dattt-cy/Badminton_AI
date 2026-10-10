@@ -1,4 +1,4 @@
-"""Pilot online-domain KAP adaptation: train Match 13, validate Match 41."""
+"""Online-domain KAP adaptation with clean replay and held-out validation."""
 
 from __future__ import annotations
 
@@ -38,6 +38,11 @@ def args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--seed", type=int, default=20260929)
+    parser.add_argument(
+        "--selection-metric", choices=("accuracy", "balanced_accuracy", "macro_f1"),
+        default="balanced_accuracy",
+        help="Validation metric used to select the checkpoint.",
+    )
     return parser.parse_args()
 
 
@@ -105,9 +110,14 @@ def main() -> None:
     baseline = evaluate(model, validation_inputs, validation_targets, device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.learning_rate, weight_decay=1e-4)
     criterion = nn.CrossEntropyLoss(label_smoothing=0.03)
-    best = baseline["accuracy"]; history = []
+    best_score = baseline[cfg.selection_metric]
+    best_metrics = baseline
+    history = []
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"online_train={len(online)} validation={len(validation_targets)} baseline={best:.4f}", flush=True)
+    print(
+        f"online_train={len(online)} validation={len(validation_targets)} "
+        f"baseline_{cfg.selection_metric}={best_score:.4f}", flush=True,
+    )
     for epoch in range(1, cfg.epochs + 1):
         model.train(); replay_iter = iter(replay_loader); total_loss = 0.0
         # Repeat the real online samples while anchoring every update with clean replay.
@@ -127,18 +137,27 @@ def main() -> None:
         metrics = evaluate(model, validation_inputs, validation_targets, device)
         row = {"epoch": epoch, "loss": total_loss, "validation": metrics}; history.append(row)
         print(f"epoch={epoch:02d} val_acc={metrics['accuracy']:.4f} val_f1={metrics['macro_f1']:.4f}", flush=True)
-        if metrics["accuracy"] > best:
-            best = metrics["accuracy"]
+        if metrics[cfg.selection_metric] > best_score:
+            best_score = metrics[cfg.selection_metric]
+            best_metrics = metrics
             torch.save({"model": model.state_dict(), "epoch": epoch,
                         "base_checkpoint": str(cfg.base), "online_train_matches": sorted(per_match),
-                        "online_validation_match": "41", "val_metrics": metrics},
+                        "online_validation_match": "41", "val_metrics": metrics,
+                        "selection_metric": cfg.selection_metric,
+                        "selection_score": best_score},
                        cfg.output_dir / "best.pth")
     result = {"protocol": "online_train_matches13_17_validate_match41", "offsets": offsets,
               "per_match": per_match,
               "online_train_samples": len(online), "baseline": baseline,
-              "best_accuracy": best, "history": history}
+              "selection_metric": cfg.selection_metric,
+              "best_score": best_score, "best_metrics": best_metrics,
+              "best_accuracy": best_metrics["accuracy"], "history": history}
     (cfg.output_dir / "metrics.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"baseline": baseline["accuracy"], "best": best}, indent=2))
+    print(json.dumps({
+        "selection_metric": cfg.selection_metric,
+        "baseline": baseline[cfg.selection_metric], "best": best_score,
+        "best_accuracy": best_metrics["accuracy"],
+    }, indent=2))
 
 
 if __name__ == "__main__":
