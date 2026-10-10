@@ -50,9 +50,12 @@ class FastTrackNet:
 
     def __init__(
         self,
-        checkpoint_path: Union[str, Path] = "external/TrackNetV3/ckpts/TrackNet_best.pt",
+        checkpoint_path: Optional[Union[str, Path]] = None,
         device: Optional[Union[str, torch.device]] = None,
     ):
+        if checkpoint_path is None:
+            canonical_ckpt = Path(__file__).resolve().parents[1] / "models" / "checkpoints" / "tracknet_best.pt"
+            checkpoint_path = canonical_ckpt if canonical_ckpt.exists() else "external/TrackNetV3/ckpts/TrackNet_best.pt"
         if device is None:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:

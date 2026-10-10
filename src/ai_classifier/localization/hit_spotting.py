@@ -175,3 +175,58 @@ def _median(values: Sequence[int]) -> float | None:
     if len(ordered) % 2:
         return float(ordered[middle])
     return (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def rescue_pre_rally_serves(
+    base_events: Sequence[HitEvent],
+    raw_events: Sequence[HitEvent],
+    *,
+    min_serve_score: float = 0.60,
+    min_dead_time_frames: int = 75,
+    max_return_gap_frames: int = 85,
+    nms_radius: int = 8,
+    same_side_radius: int = 15,
+) -> list[HitEvent]:
+    """Recover low-velocity serves that occurred after dead time before a rally.
+
+    Serves have lower kinetic energy / wrist acceleration and are frequently suppressed
+    at strict production thresholds (e.g. 0.75). If a candidate scored >= min_serve_score
+    follows a long dead-time interval (>= min_dead_time_frames) and is followed by a
+    confirmed opponent return shot within max_return_gap_frames, it is safely restored.
+    """
+    if not raw_events or not base_events:
+        return list(base_events)
+
+    low_candidates = two_stage_temporal_nms(
+        raw_events,
+        threshold=min_serve_score,
+        radius=nms_radius,
+        same_side_radius=same_side_radius,
+    )
+    base_frames = [e.frame for e in base_events]
+    existing_frames = set(base_frames)
+
+    rescued: list[HitEvent] = []
+    for cand in low_candidates:
+        if cand.frame in existing_frames:
+            continue
+        prev_hits = [f for f in base_frames if f < cand.frame]
+        prev_gap = (cand.frame - max(prev_hits)) if prev_hits else 9999
+        next_hits = [e for e in base_events if e.frame > cand.frame]
+        if not next_hits:
+            continue
+        next_event = min(next_hits, key=lambda e: e.frame)
+        next_gap = next_event.frame - cand.frame
+
+        # Guard: dead-time before, prompt opponent return after, opposing player sides
+        if (
+            prev_gap >= min_dead_time_frames
+            and 15 <= next_gap <= max_return_gap_frames
+            and cand.side != next_event.side
+        ):
+            rescued.append(cand)
+
+    merged = list(base_events) + rescued
+    merged.sort(key=lambda e: e.frame)
+    return merged
+
