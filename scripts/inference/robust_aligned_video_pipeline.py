@@ -124,9 +124,9 @@ class AlignedVideoPipeline:
 
         print("[*] Loading R(2+1)D Visual Backbone...")
         self.rgb_model = MultiTaskR2Plus1D().to(DEVICE)
-        backbone_ckpt = Path("src/ai_classifier/models/checkpoints/visual_backbone.pth")
+        backbone_ckpt = REPO_ROOT / "src" / "ai_classifier" / "models" / "checkpoints" / "visual_backbone.pth"
         if not backbone_ckpt.exists():
-            backbone_ckpt = Path("work_dirs/r2plus1d18_mixed_shuttleset_finebadminton/best.pth")
+            backbone_ckpt = REPO_ROOT / "work_dirs" / "r2plus1d18_mixed_shuttleset_finebadminton" / "best.pth"
         rgb_ckpt = torch.load(str(backbone_ckpt), map_location="cpu", weights_only=False)
         self.rgb_model.load_state_dict(rgb_ckpt["model"], strict=False)
         self.rgb_model.eval()
@@ -532,6 +532,91 @@ class AlignedVideoPipeline:
             "confidence": float(avg_probs[pred_idx].item()),
             "top2": [STROKE_CLASSES[k] for k in top2_idx],
             "logits": torch.log(avg_probs.clamp_min(1e-7)),
+            "tta_used": len(probs_list) > 1,
+            "tta_windows": len(probs_list),
         }
         return base_feature, detail_tta
+
+    def predict_detailed_adaptive_tta(
+        self,
+        cap: cv2.VideoCapture,
+        frame: int,
+        total_frames: int,
+        hitter_side: str,
+        contact_refine_radius: int = 6,
+        confidence_threshold: float = 0.75,
+        margin_threshold: float = 0.20,
+        offsets: tuple[int, ...] = (-2, 2),
+        classifier: KAPScratchModel | None = None,
+    ) -> tuple[dict | None, dict | None]:
+        """Run extra temporal windows only for uncertain base predictions."""
+        base_feature = self.extract_features(
+            cap,
+            frame,
+            total_frames,
+            hitter_side=hitter_side,
+            contact_refine_radius=contact_refine_radius,
+        )
+        if base_feature is None:
+            return None, None
+        base_detail = self.predict_detailed(base_feature, classifier=classifier)
+        base_probs = F.softmax(base_detail["logits"], dim=-1)
+        top2_probs = base_probs.topk(2).values
+        margin = float((top2_probs[0] - top2_probs[1]).item())
+        if (
+            base_detail["confidence"] >= confidence_threshold
+            and margin >= margin_threshold
+        ):
+            base_detail["tta_used"] = False
+            base_detail["tta_windows"] = 1
+            return base_feature, base_detail
+
+        probs_list = [base_probs]
+        for offset in offsets:
+            shifted_frame = frame + offset
+            if shifted_frame < 0 or shifted_frame >= total_frames:
+                continue
+            feature = self.extract_features(
+                cap,
+                shifted_frame,
+                total_frames,
+                hitter_side=hitter_side,
+                contact_refine_radius=contact_refine_radius,
+            )
+            if feature is None:
+                continue
+            detail = self.predict_detailed(feature, classifier=classifier)
+            probs_list.append(F.softmax(detail["logits"], dim=-1))
+
+        average = torch.stack(probs_list).mean(dim=0)
+        pred_idx = int(average.argmax().item())
+        top2_idx = average.topk(2).indices.tolist()
+
+        predicted_stroke = STROKE_CLASSES[pred_idx]
+        confidence = float(average[pred_idx].item())
+        top2_classes = [STROKE_CLASSES[index] for index in top2_idx]
+
+        # Context-aware disambiguation for low-confidence boundary pairs
+        if confidence < 0.60:
+            if predicted_stroke == "lift" and top2_classes == ["lift", "net_attack"]:
+                predicted_stroke = "net_attack"
+            elif set(top2_classes) == {"drive", "net_shot"} and base_feature is not None:
+                # s_p: normalized court position (x, y) where y is along length
+                # Front court near net: y_dist_net < 0.18 -> net_shot, Mid-court: > 0.22 -> drive
+                court_pts = base_feature["s_p"][0].detach().cpu().numpy()
+                y_pos = float(court_pts[:, 1].mean())
+                y_dist_net = y_pos if hitter_side == "upper" else (1.0 - y_pos)
+                if y_dist_net > 0.22:
+                    predicted_stroke = "drive"
+                elif y_dist_net < 0.16:
+                    predicted_stroke = "net_shot"
+
+        return base_feature, {
+            "stroke": predicted_stroke,
+            "confidence": confidence,
+            "top2": top2_classes,
+            "logits": torch.log(average.clamp_min(1e-7)),
+            "tta_used": len(probs_list) > 1,
+            "tta_windows": len(probs_list),
+        }
 

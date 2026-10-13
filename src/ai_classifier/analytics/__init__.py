@@ -1,4 +1,9 @@
-from .stroke import assign_rallies, build_stroke_analytics
+from .stroke import (
+    assign_rallies,
+    build_stroke_analytics,
+    prune_trailing_phantom_hits,
+    suppress_weak_duplicate_serves,
+)
 from .match_analysis import (
     analyze_scoreboard,
     build_match_analysis,
@@ -12,6 +17,8 @@ from .scoreboard import ScoreChangeTracker, extract_score_events
 __all__ = [
     "assign_rallies",
     "build_stroke_analytics",
+    "prune_trailing_phantom_hits",
+    "suppress_weak_duplicate_serves",
     "build_tactical_analytics",
     "build_match_analysis",
     "analyze_scoreboard",

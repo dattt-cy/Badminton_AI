@@ -4,7 +4,12 @@ import numpy as np
 import pytest
 
 from ai_classifier.features import modality_quality_vector
-from ai_classifier.localization import HitEvent, two_stage_temporal_nms
+from ai_classifier.localization import (
+    HitEvent,
+    rescue_alternating_bridges,
+    rescue_pre_rally_serves,
+    two_stage_temporal_nms,
+)
 from ai_classifier.localization.contact_refinement import refine_contact_index
 from scripts.evaluation.tune_hit_postprocessing import Case, aggregate
 from scripts.inference.auto_court_detection import _validate_corners
@@ -116,4 +121,58 @@ def test_modality_quality_vector_preserves_training_scale() -> None:
     assert quality[1] == np.float32(expected_speed_std)
     assert quality[2] == np.float32(1 / 6)
     assert quality[3] == np.float32(expected_pose_motion)
+
+
+def test_rescues_opposite_side_candidate_bridging_same_side_hits() -> None:
+    base = [HitEvent(100, "upper", 0.9), HitEvent(160, "upper", 0.9)]
+    raw = base + [HitEvent(130, "lower", 0.61)]
+    rescued = rescue_alternating_bridges(base, raw)
+    assert [(event.frame, event.side) for event in rescued] == [
+        (100, "upper"), (130, "lower"), (160, "upper")
+    ]
+
+
+def test_bridge_rescue_rejects_wrong_side_and_edge_echoes() -> None:
+    base = [HitEvent(100, "upper", 0.9), HitEvent(160, "upper", 0.9)]
+    raw = base + [
+        HitEvent(130, "upper", 0.8),
+        HitEvent(153, "lower", 0.8),
+    ]
+    assert rescue_alternating_bridges(base, raw) == base
+
+
+def test_serve_rescue_accepts_guarded_low_score_serve() -> None:
+    base = [HitEvent(100, "upper", 0.9), HitEvent(300, "upper", 0.9)]
+    raw = base + [HitEvent(250, "lower", 0.41)]
+    rescued = rescue_pre_rally_serves(base, raw)
+    assert any(event.frame == 250 for event in rescued)
+
+
+def test_adaptive_tta_skips_extra_windows_for_confident_prediction(monkeypatch) -> None:
+    import torch
+
+    pipeline = object.__new__(AlignedVideoPipeline)
+    calls = []
+
+    def extract(_cap, frame, _total, **_kwargs):
+        calls.append(frame)
+        return {"frame": frame}
+
+    def predict(_feature, classifier=None):
+        del classifier
+        return {
+            "stroke": "smash",
+            "confidence": 0.9,
+            "top2": ["smash", "clear"],
+            "logits": torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 4.0]),
+        }
+
+    monkeypatch.setattr(pipeline, "extract_features", extract)
+    monkeypatch.setattr(pipeline, "predict_detailed", predict)
+    _feature, detail = pipeline.predict_detailed_adaptive_tta(
+        None, 100, 200, "upper"
+    )
+    assert calls == [100]
+    assert detail["tta_used"] is False
+    assert detail["tta_windows"] == 1
 

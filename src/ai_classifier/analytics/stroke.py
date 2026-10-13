@@ -16,6 +16,64 @@ ATTACK_STROKES = {"smash", "net_attack", "drive"}
 DEFENCE_STROKES = {"lift", "clear"}
 
 
+def suppress_weak_duplicate_serves(
+    predictions: list[dict[str, Any]],
+    *,
+    max_gap_frames: int = 90,
+    weak_hit_score: float = 0.60,
+    minimum_score_advantage: float = 0.15,
+    maximum_shuttle_visibility: float = 0.10,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Drop a weak serve immediately followed by stronger serve evidence.
+
+    A genuine singles rally cannot normally begin with two consecutive serves
+    less than a few seconds apart. The guard only suppresses the weaker event
+    when it also lacks shuttle evidence, keeping the decision auditable.
+    """
+    kept: list[dict[str, Any]] = []
+    suppressed: list[dict[str, Any]] = []
+    index = 0
+    while index < len(predictions):
+        current = predictions[index]
+        following = predictions[index + 1] if index + 1 < len(predictions) else None
+        if following is not None:
+            current_frame = int(current.get("refined_frame", current.get("frame", 0)))
+            following_frame = int(
+                following.get("refined_frame", following.get("frame", 0))
+            )
+            current_score = float(current.get("hit_score", 1.0))
+            following_score = float(following.get("hit_score", 0.0))
+            visibility = float(
+                (current.get("analytics") or {}).get("shuttle_visibility_ratio", 1.0)
+            )
+            should_suppress = (
+                current.get("stroke") == "serve"
+                and following.get("stroke") == "serve"
+                and 0 < following_frame - current_frame <= max_gap_frames
+                and current_score < weak_hit_score
+                and following_score - current_score >= minimum_score_advantage
+                and visibility <= maximum_shuttle_visibility
+            )
+            if should_suppress:
+                suppressed.append(
+                    {
+                        "frame": int(current.get("frame", current_frame)),
+                        "refined_frame": current_frame,
+                        "hit_score": round(current_score, 4),
+                        "replacement_frame": int(
+                            following.get("frame", following_frame)
+                        ),
+                        "replacement_hit_score": round(following_score, 4),
+                        "reason": "weak_duplicate_serve_without_shuttle_evidence",
+                    }
+                )
+                index += 1
+                continue
+        kept.append(current)
+        index += 1
+    return kept, suppressed
+
+
 def court_area(point: np.ndarray | None, rows: int = 3, columns: int = 3) -> int | None:
     """Return a one-based court grid area, or None for invalid projections."""
     if point is None or len(point) != 2 or not np.isfinite(point).all():
@@ -232,6 +290,7 @@ def assign_rallies(
 
     if prune_echoes and predictions:
         prune_pseudo_rallies(predictions, fps=fps)
+        predictions[:] = prune_trailing_phantom_hits(predictions, fps=fps)
 
     return predictions
 
@@ -265,4 +324,41 @@ def prune_pseudo_rallies(
     for p in predictions:
         p["rally"] = mapping[p["rally"]]
     return len(mapping)
+
+
+def prune_trailing_phantom_hits(
+    predictions: list[dict[str, Any]],
+    *,
+    fps: float = 30.0,
+    max_terminal_gap_seconds: float = 0.75,
+) -> list[dict[str, Any]]:
+    """Prune false-positive trailing swings at rally end (e.g. failing to retrieve a dead shuttle)."""
+    if not predictions:
+        return predictions
+
+    rally_groups: dict[int, list[dict[str, Any]]] = {}
+    for p in predictions:
+        rally_groups.setdefault(p.get("rally", 1), []).append(p)
+
+    kept: list[dict[str, Any]] = []
+    for r_id in sorted(rally_groups.keys()):
+        hits = rally_groups[r_id]
+        if len(hits) >= 2:
+            last = hits[-1]
+            penult = hits[-2]
+            f_last = int(last.get("refined_frame", last.get("frame", 0)))
+            f_penult = int(penult.get("refined_frame", penult.get("frame", 0)))
+            gap_sec = (f_last - f_penult) / fps if fps > 0 else 999.0
+
+            is_trailing_echo = (
+                last.get("stroke") in ("net_shot", "net_attack")
+                and penult.get("stroke") in ("net_shot", "drop", "smash", "net_attack")
+                and last.get("hitter") != penult.get("hitter")
+                and gap_sec <= max_terminal_gap_seconds
+            )
+            if is_trailing_echo:
+                hits = hits[:-1]
+        kept.extend(hits)
+
+    return kept
 

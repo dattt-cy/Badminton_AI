@@ -181,7 +181,7 @@ def rescue_pre_rally_serves(
     base_events: Sequence[HitEvent],
     raw_events: Sequence[HitEvent],
     *,
-    min_serve_score: float = 0.60,
+    min_serve_score: float = 0.40,
     min_dead_time_frames: int = 75,
     max_return_gap_frames: int = 85,
     nms_radius: int = 8,
@@ -229,4 +229,51 @@ def rescue_pre_rally_serves(
     merged = list(base_events) + rescued
     merged.sort(key=lambda e: e.frame)
     return merged
+
+
+def rescue_alternating_bridges(
+    base_events: Sequence[HitEvent],
+    raw_events: Sequence[HitEvent],
+    *,
+    min_score: float = 0.55,
+    min_leg_frames: int = 12,
+    max_leg_frames: int = 85,
+    nms_radius: int = 8,
+    same_side_radius: int = 15,
+) -> list[HitEvent]:
+    """Restore one plausible opposite-side hit between consecutive same-side hits.
+
+    Singles rallies normally alternate hitters. A same-side pair can therefore
+    expose a missed low-score opponent hit. This guard is deliberately local:
+    it only accepts a candidate strictly between the pair, sufficiently far
+    from both kept events, and chooses at most one peak per gap.
+    """
+    base = sorted(base_events, key=lambda event: event.frame)
+    if len(base) < 2 or not raw_events:
+        return base
+    candidates = two_stage_temporal_nms(
+        raw_events,
+        threshold=min_score,
+        radius=nms_radius,
+        same_side_radius=same_side_radius,
+    )
+    rescued: list[HitEvent] = []
+    for previous, following in zip(base, base[1:]):
+        if previous.side != following.side:
+            continue
+        options = [
+            candidate
+            for candidate in candidates
+            if candidate.side != previous.side
+            and min_leg_frames <= candidate.frame - previous.frame <= max_leg_frames
+            and min_leg_frames <= following.frame - candidate.frame <= max_leg_frames
+        ]
+        if options:
+            rescued.append(max(options, key=lambda event: event.score))
+
+    merged = base + rescued
+    # A candidate can satisfy only one adjacent gap in normal ordering, but
+    # de-duplicate defensively for synthetic inputs and future callers.
+    unique = {(event.frame, event.side): event for event in merged}
+    return sorted(unique.values(), key=lambda event: event.frame)
 
