@@ -200,7 +200,7 @@ Frontend không nên hiển thị `video.path` trực tiếp vì đây là đư�
       "text": "3 - 5",
       "leader": "lower",
       "is_estimate": true,
-      "method": "rally_winner_heuristic",
+      "method": "heuristic_rally_outcome",
       "complete_rallies_counted": 8
     }
   }
@@ -221,7 +221,8 @@ Frontend không nên hiển thị `video.path` trực tiếp vì đây là đư�
     "partial_last_rally": true,
     "low_confidence_threshold": 0.7,
     "low_confidence_hits": 6,
-    "landing_is_2d_proxy": true
+    "landing_is_2d_proxy": true,
+    "suppressed_weak_duplicate_serves": 1
   }
 }
 ```
@@ -267,6 +268,8 @@ Response:
       "stroke": "smash",
       "confidence": 0.9169,
       "top2": ["smash", "drive"],
+      "tta_used": true,
+      "tta_windows": 3,
       "crop_box": [596, 181, 842, 427],
       "analytics": {
         "player_position_court": [0.6392, 0.33742],
@@ -277,7 +280,7 @@ Response:
         "landing_position_court_proxy": [0.95556, 0.06016],
         "landing_area_3x3_proxy": 3,
         "landing_proxy_frame": 2168,
-        "landing_proxy_confidence": 0.72,
+        "landing_proxy_confidence": 0.62,
         "flight_time_to_next_hit_seconds": 0.9,
         "average_shuttle_speed_image_per_second": 0.37919,
         "average_wrist_speed_image_per_second": 0.3038,
@@ -304,6 +307,25 @@ Response:
 ```
 
 Các field landing, vị trí hoặc tốc độ có thể là `null` nếu pipeline không thu đủ dữ liệu.
+`tta_used` cho biết hit có cần chạy thêm cửa sổ temporal hay không;
+`tta_windows` thường là `1` hoặc `3`.
+
+Các event bị loại sau phân loại được giữ trong full result để audit:
+
+```json
+{
+  "suppression_audit": {
+    "weak_duplicate_serves": [
+      {
+        "frame": 2144,
+        "hit_score": 0.4431,
+        "replacement_frame": 2188,
+        "reason": "weak_duplicate_serve_without_shuttle_evidence"
+      }
+    ]
+  }
+}
+```
 
 ## 9. Rallies
 
@@ -348,7 +370,7 @@ Các field landing, vị trí hoặc tốc độ có thể là `null` nếu pipe
       "text": "3 - 5",
       "leader": "lower",
       "is_estimate": true,
-      "method": "rally_winner_heuristic",
+      "method": "heuristic_rally_outcome",
       "complete_rallies_counted": 8
     },
     "rallies": []
@@ -518,14 +540,23 @@ Không ghi nhãn dữ liệu này là “tổng quãng đường thực tế”;
 {
   "job_id": "fb13f93b9c584eac934802c47845f607",
   "radar_chart": {
-    "axes": ["attack", "defense", "net_play", "consistency", "variation"],
-    "upper": [72, 64, 81, 76, 68],
-    "lower": [65, 79, 69, 73, 75]
+    "axes": [
+      "Attack Stroke Share",
+      "Defensive Stroke Share",
+      "Net Stroke Share",
+      "Shot Variety",
+      "Mean Model Confidence",
+      "Fast Stroke Share"
+    ],
+    "upper": [69, 34, 86, 91, 86, 59],
+    "lower": [43, 68, 92, 73, 87, 54]
   }
 }
 ```
 
 Giữ nguyên thứ tự của `axes`, `upper` và `lower` khi truyền vào chart library.
+Đây là hồ sơ quan sát trong đoạn video, không phải điểm năng lực VĐV đã được
+chuẩn hóa.
 
 ## 17. Response transition matrix
 
@@ -602,6 +633,7 @@ Endpoint này trả toàn bộ output của pipeline:
     "structured_tactics": {},
     "movement": {},
     "scoreboard_ocr": {},
+    "suppression_audit": {},
     "spatial_distribution_3x3": {},
     "player_profiles": {},
     "radar_chart": {},
@@ -686,6 +718,8 @@ export interface StrokeItem {
   stroke: string;
   confidence: number;
   top2?: string[];
+  tta_used?: boolean;
+  tta_windows?: number;
   crop_box?: [number, number, number, number];
   analytics: Record<string, unknown>;
   rally: number | null;
