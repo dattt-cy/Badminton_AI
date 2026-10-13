@@ -37,8 +37,10 @@ from ai_classifier.analytics import (  # noqa: E402
     build_stroke_analytics,
     build_match_analysis,
     extract_score_events,
+    suppress_weak_duplicate_serves,
 )
 from ai_classifier.localization import (  # noqa: E402
+    rescue_alternating_bridges,
     two_stage_temporal_nms,
     rescue_pre_rally_serves,
 )
@@ -80,7 +82,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--same-side-nms-radius",
         type=int,
-        default=15,
+        default=18,
         help="Second-stage same-side duplicate suppression radius",
     )
     parser.add_argument(
@@ -99,6 +101,12 @@ def parse_args() -> argparse.Namespace:
         help="Optional calibrated scoreboard digit ROI for EasyOCR",
     )
     parser.add_argument(
+        "--auto-ocr",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Automatically scan standard BWF broadcast scoreboard overlay with EasyOCR",
+    )
+    parser.add_argument(
         "--score-ocr-interval",
         type=int,
         default=30,
@@ -108,7 +116,7 @@ def parse_args() -> argparse.Namespace:
         "--use-tta",
         action="store_true",
         default=True,
-        help="Enable temporal multi-window soft-voting (TTA)",
+        help="Enable adaptive temporal soft-voting (default)",
     )
     parser.add_argument(
         "--no-tta",
@@ -116,6 +124,16 @@ def parse_args() -> argparse.Namespace:
         action="store_false",
         help="Disable temporal multi-window soft-voting",
     )
+    parser.add_argument(
+        "--full-tta",
+        action="store_true",
+        help="Run all three temporal windows for every hit (slower)",
+    )
+    parser.add_argument("--tta-confidence-threshold", type=float, default=0.75)
+    parser.add_argument("--tta-margin-threshold", type=float, default=0.20)
+    parser.add_argument("--serve-rescue-threshold", type=float, default=0.40)
+    parser.add_argument("--bridge-rescue-threshold", type=float, default=0.55)
+    parser.add_argument("--no-hit-rescue", action="store_true")
     return parser.parse_args()
 
 
@@ -137,8 +155,15 @@ def analyze_badminton_video(
     shared_cache: bool = True,
     use_amp: bool = True,
     use_tta: bool = True,
+    full_tta: bool = False,
+    tta_confidence_threshold: float = 0.75,
+    tta_margin_threshold: float = 0.20,
+    hit_rescue: bool = True,
+    serve_rescue_threshold: float = 0.40,
+    bridge_rescue_threshold: float = 0.55,
     score_roi: tuple[int, int, int, int] | None = None,
     score_ocr_interval: int = 30,
+    auto_ocr: bool = True,
 ) -> dict[str, Any]:
     """Execute full end-to-end video analysis pipeline and return structured dict."""
     video_path = Path(video_path)
@@ -175,12 +200,21 @@ def analyze_badminton_video(
         radius=nms_radius,
         same_side_radius=same_side_nms_radius,
     )
-    events = rescue_pre_rally_serves(
-        events,
-        raw_events,
-        nms_radius=nms_radius,
-        same_side_radius=same_side_nms_radius,
-    )
+    if hit_rescue:
+        events = rescue_pre_rally_serves(
+            events,
+            raw_events,
+            min_serve_score=serve_rescue_threshold,
+            nms_radius=nms_radius,
+            same_side_radius=same_side_nms_radius,
+        )
+        events = rescue_alternating_bridges(
+            events,
+            raw_events,
+            min_score=bridge_rescue_threshold,
+            nms_radius=nms_radius,
+            same_side_radius=same_side_nms_radius,
+        )
     scan_time = time.time() - t0_scan
     del hit_model
     if device.type == "cuda":
@@ -192,72 +226,86 @@ def analyze_badminton_video(
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video stream: {video_path}")
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = float(cap.get(cv2.CAP_PROP_FPS)) or 30.0
+    try:
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = float(cap.get(cv2.CAP_PROP_FPS)) or 30.0
 
-    corners = detect_court_corners(str(video_path))
-    pipeline = AlignedVideoPipeline(
-        ckpt_path=Path(kap_checkpoint),
-        corners=corners,
-        orig_w=width,
-        orig_h=height,
-        pose_model_path=Path(pose_model),
-    )
-
-    # 3. Shared Pose Cache & KAP Feature Classification
-    print(f"\n--- STEP 3/5: MULTI-MODAL STROKE CLASSIFICATION ({len(events)} candidates) ---")
-    t0_classify = time.time()
-    cache_stats = None
-    if shared_cache:
-        cache_stats = pipeline.prepare_event_cache(
-            cap,
-            [event.frame for event in events],
-            total_frames,
-            contact_refine_radius=contact_refine_radius,
+        corners = detect_court_corners(str(video_path))
+        pipeline = AlignedVideoPipeline(
+            ckpt_path=Path(kap_checkpoint),
+            corners=corners,
+            orig_w=width,
+            orig_h=height,
+            pose_model_path=Path(pose_model),
         )
 
-    predictions = []
-    for idx, event in enumerate(events, 1):
-        if use_tta:
-            feature, detail = pipeline.predict_detailed_tta(
+        # 3. Shared Pose Cache & KAP Feature Classification
+        print(f"\n--- STEP 3/5: MULTI-MODAL STROKE CLASSIFICATION ({len(events)} candidates) ---")
+        t0_classify = time.time()
+        cache_stats = None
+        if shared_cache:
+            cache_stats = pipeline.prepare_event_cache(
                 cap,
-                event.frame,
+                [event.frame for event in events],
                 total_frames,
-                hitter_side=event.side,
                 contact_refine_radius=contact_refine_radius,
             )
-        else:
-            feature = pipeline.extract_features(
-                cap,
-                event.frame,
-                total_frames,
-                hitter_side=event.side,
-                contact_refine_radius=contact_refine_radius,
-            )
-            detail = pipeline.predict_detailed(feature) if feature is not None else None
 
-        if feature is None or detail is None:
-            continue
-        predictions.append({
-            "hit_index": idx,
-            "frame": event.frame,
-            "time_seconds": round(event.frame / fps, 3),
-            "refined_frame": int(feature["hit_frame"]),
-            "contact_offset": int(feature["contact_offset"]),
-            "hitter": event.side,
-            "hitter_name": player_upper if event.side == "upper" else player_lower,
-            "hit_score": round(float(event.score), 4),
-            "stroke": detail["stroke"],
-            "confidence": round(float(detail["confidence"]), 4),
-            "top2": detail["top2"],
-            "crop_box": list(feature["crop_box"]),
-            "_analytics_context": feature["analytics_context"],
-        })
-        if idx % 20 == 0 or idx == len(events):
-            print(f"  [{idx}/{len(events)}] frame={event.frame} ({detail['stroke']}, conf={detail['confidence']:.2f})")
-    cap.release()
+        predictions = []
+        for idx, event in enumerate(events, 1):
+            if use_tta and full_tta:
+                feature, detail = pipeline.predict_detailed_tta(
+                    cap,
+                    event.frame,
+                    total_frames,
+                    hitter_side=event.side,
+                    contact_refine_radius=contact_refine_radius,
+                )
+            elif use_tta:
+                feature, detail = pipeline.predict_detailed_adaptive_tta(
+                    cap,
+                    event.frame,
+                    total_frames,
+                    hitter_side=event.side,
+                    contact_refine_radius=contact_refine_radius,
+                    confidence_threshold=tta_confidence_threshold,
+                    margin_threshold=tta_margin_threshold,
+                )
+            else:
+                feature = pipeline.extract_features(
+                    cap,
+                    event.frame,
+                    total_frames,
+                    hitter_side=event.side,
+                    contact_refine_radius=contact_refine_radius,
+                )
+                detail = pipeline.predict_detailed(feature) if feature is not None else None
+
+            if feature is None or detail is None:
+                continue
+            predictions.append({
+                "hit_index": idx,
+                "frame": event.frame,
+                "time_seconds": round(event.frame / fps, 3),
+                "refined_frame": int(feature["hit_frame"]),
+                "contact_offset": int(feature["contact_offset"]),
+                "hitter": event.side,
+                "hitter_name": player_upper if event.side == "upper" else player_lower,
+                "hit_score": round(float(event.score), 4),
+                "stroke": detail["stroke"],
+                "confidence": round(float(detail["confidence"]), 4),
+                "top2": detail["top2"],
+                "tta_used": bool(detail.get("tta_used", False)),
+                "tta_windows": int(detail.get("tta_windows", 1)),
+                "crop_box": list(feature["crop_box"]),
+                "_analytics_context": feature["analytics_context"],
+            })
+            if idx % 20 == 0 or idx == len(events):
+                print(f"  [{idx}/{len(events)}] frame={event.frame} ({detail['stroke']}, conf={detail['confidence']:.2f})")
+    finally:
+        cap.release()
 
     # Stroke analytics
     for i, pred in enumerate(predictions):
@@ -267,6 +315,13 @@ def analyze_badminton_video(
             stroke=pred["stroke"],
             fps=fps,
             next_hit_frame=next_f,
+        )
+    predictions, suppressed_duplicate_serves = suppress_weak_duplicate_serves(
+        predictions
+    )
+    if suppressed_duplicate_serves:
+        print(
+            f"[+] Suppressed {len(suppressed_duplicate_serves)} weak duplicate serve(s)"
         )
     classify_time = time.time() - t0_classify
     print(f"[+] Classified {len(predictions)} hits ({classify_time:.1f}s)")
@@ -302,13 +357,26 @@ def analyze_badminton_video(
     tactics_time = time.time() - t0_tactics
 
     scoreboard_ocr = {"enabled": False, "reason": "score_roi_not_configured"}
-    if score_roi is not None:
-        print("[*] Scanning calibrated scoreboard ROI with OCR...")
-        scoreboard_ocr = extract_score_events(
-            video_path,
-            score_roi,
-            sample_interval_frames=score_ocr_interval,
+    effective_score_roi = score_roi
+    if effective_score_roi is None and auto_ocr:
+        # Standard BWF broadcast scoreboard overlay ROI scaled to frame resolution
+        effective_score_roi = (
+            int(40 * height / 720),
+            int(110 * height / 720),
+            int(410 * width / 1280),
+            int(445 * width / 1280),
         )
+    if effective_score_roi is not None:
+        try:
+            print(f"[*] Scanning BWF broadcast scoreboard ROI {effective_score_roi} with EasyOCR...")
+            scoreboard_ocr = extract_score_events(
+                video_path,
+                effective_score_roi,
+                sample_interval_frames=score_ocr_interval,
+            )
+        except Exception as ocr_err:
+            print(f"[!] Warning: Scoreboard OCR scan skipped or failed ({ocr_err})")
+            scoreboard_ocr = {"enabled": False, "reason": str(ocr_err)}
 
     total_time = time.time() - started_total
     duration_seconds = round(total_frames / fps, 2)
@@ -328,6 +396,7 @@ def analyze_badminton_video(
         "low_confidence_threshold": 0.70,
         "low_confidence_hits": sum(p["confidence"] < 0.70 for p in predictions),
         "landing_is_2d_proxy": True,
+        "suppressed_weak_duplicate_serves": len(suppressed_duplicate_serves),
     }
 
     result = {
@@ -359,6 +428,9 @@ def analyze_badminton_video(
         "structured_tactics": tactics["structured_tactics"],
         "movement": tactics["movement"],
         "scoreboard_ocr": scoreboard_ocr,
+        "suppression_audit": {
+            "weak_duplicate_serves": suppressed_duplicate_serves,
+        },
         "spatial_distribution_3x3": tactics["spatial_distribution_3x3"],
         "player_profiles": tactics.get("player_profiles", {}),
         "radar_chart": tactics.get("radar_chart", {}),
@@ -411,8 +483,16 @@ def main() -> None:
         contact_refine_radius=args.contact_refine_radius,
         shared_cache=not args.no_shared_cache,
         use_amp=not args.no_amp,
+        use_tta=args.use_tta,
+        full_tta=args.full_tta,
+        tta_confidence_threshold=args.tta_confidence_threshold,
+        tta_margin_threshold=args.tta_margin_threshold,
+        hit_rescue=not args.no_hit_rescue,
+        serve_rescue_threshold=args.serve_rescue_threshold,
+        bridge_rescue_threshold=args.bridge_rescue_threshold,
         score_roi=tuple(args.score_roi) if args.score_roi else None,
         score_ocr_interval=args.score_ocr_interval,
+        auto_ocr=args.auto_ocr,
     )
 
 

@@ -23,6 +23,7 @@ from ai_classifier.localization import (
     HitEvent,
     two_stage_temporal_nms,
     rescue_pre_rally_serves,
+    rescue_alternating_bridges,
 )
 from ai_classifier.models import KAPScratchModel
 
@@ -72,8 +73,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--use-tta", action="store_true", default=False,
-        help="Enable temporal multi-window soft-voting (TTA)",
+        help="Backward-compatible alias for --tta-mode full",
     )
+    parser.add_argument(
+        "--tta-mode",
+        choices=("none", "adaptive", "full"),
+        default="none",
+    )
+    parser.add_argument("--tta-confidence-threshold", type=float, default=0.75)
+    parser.add_argument("--tta-margin-threshold", type=float, default=0.20)
+    parser.add_argument("--serve-rescue-threshold", type=float, default=0.40)
+    parser.add_argument("--bridge-rescue-threshold", type=float, default=0.55)
     return parser.parse_args()
 
 
@@ -90,8 +100,15 @@ def main() -> None:
             raw, threshold=args.raw_threshold, radius=args.raw_nms_radius,
             same_side_radius=args.raw_same_side_nms_radius,
         )
-        rescued = rescue_pre_rally_serves(
+        rescued_serve = rescue_pre_rally_serves(
             base_events, raw,
+            min_serve_score=args.serve_rescue_threshold,
+            nms_radius=args.raw_nms_radius,
+            same_side_radius=args.raw_same_side_nms_radius,
+        )
+        rescued = rescue_alternating_bridges(
+            rescued_serve, raw,
+            min_score=args.bridge_rescue_threshold,
             nms_radius=args.raw_nms_radius,
             same_side_radius=args.raw_same_side_nms_radius,
         )
@@ -143,11 +160,19 @@ def main() -> None:
             contact_refine_radius=args.contact_refine_radius,
         )
     predictions = []
+    tta_mode = "full" if args.use_tta else args.tta_mode
     for index, event in enumerate(events, 1):
-        if args.use_tta:
+        if tta_mode == "full":
             feature, detail = pipeline.predict_detailed_tta(
                 cap, int(event["frame"]), total_frames, hitter_side=event["side"],
                 contact_refine_radius=args.contact_refine_radius,
+            )
+        elif tta_mode == "adaptive":
+            feature, detail = pipeline.predict_detailed_adaptive_tta(
+                cap, int(event["frame"]), total_frames, hitter_side=event["side"],
+                contact_refine_radius=args.contact_refine_radius,
+                confidence_threshold=args.tta_confidence_threshold,
+                margin_threshold=args.tta_margin_threshold,
             )
         else:
             feature = pipeline.extract_features(
@@ -168,6 +193,8 @@ def main() -> None:
             "contact_offset": int(feature["contact_offset"]),
             "hit_score": float(event["score"]), "stroke": detail["stroke"],
             "confidence": detail["confidence"], "top2": detail["top2"],
+            "tta_used": bool(detail.get("tta_used", False)),
+            "tta_windows": int(detail.get("tta_windows", 1)),
             "crop_box": list(feature["crop_box"]),
             "comparison_stroke": comparison["stroke"] if comparison else None,
             "comparison_confidence": comparison["confidence"] if comparison else None,
@@ -251,6 +278,9 @@ def main() -> None:
             comparison_top2 / matched if comparison_model is not None and matched else None
         ),
         "runtime_seconds": time.time() - started,
+        "tta_mode": tta_mode,
+        "tta_expanded_count": sum(row["tta_used"] for row in predictions),
+        "tta_total_windows": sum(row["tta_windows"] for row in predictions),
         "per_class": dict(by_class), "predictions": predictions, "matches": matches,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -5,6 +5,7 @@ from ai_classifier.analytics import (
     analyze_scoreboard,
     build_tactical_analytics,
     extract_tactical_patterns,
+    suppress_weak_duplicate_serves,
 )
 
 
@@ -207,4 +208,70 @@ def test_coachai_plus_marks_spatial_tactics_as_proxy_based():
     assert four_corner["evidence_quality"] == "complete_proxy_coverage"
 
 
+def test_suppresses_weak_duplicate_serve_without_shuttle_evidence():
+    predictions = [
+        {
+            "frame": 100,
+            "refined_frame": 100,
+            "stroke": "serve",
+            "hit_score": 0.44,
+            "analytics": {"shuttle_visibility_ratio": 0.0},
+        },
+        {
+            "frame": 145,
+            "refined_frame": 145,
+            "stroke": "serve",
+            "hit_score": 0.86,
+            "analytics": {"shuttle_visibility_ratio": 1.0},
+        },
+    ]
+    kept, audit = suppress_weak_duplicate_serves(predictions)
+    assert [row["frame"] for row in kept] == [145]
+    assert audit[0]["frame"] == 100
+
+
+def test_keeps_low_score_serve_when_shuttle_is_visible():
+    predictions = [
+        {
+            "frame": 100,
+            "stroke": "serve",
+            "hit_score": 0.44,
+            "analytics": {"shuttle_visibility_ratio": 0.8},
+        },
+        {
+            "frame": 145,
+            "stroke": "serve",
+            "hit_score": 0.86,
+            "analytics": {"shuttle_visibility_ratio": 1.0},
+        },
+    ]
+    kept, audit = suppress_weak_duplicate_serves(predictions)
+    assert len(kept) == 2
+    assert audit == []
+
+
+def test_prune_trailing_phantom_hits_removes_dead_shuttle_echo():
+    from ai_classifier.analytics import prune_trailing_phantom_hits
+
+    predictions = [
+        {"frame": 100, "stroke": "serve", "hitter": "lower", "rally": 1},
+        {"frame": 130, "stroke": "smash", "hitter": "upper", "rally": 1},
+        {"frame": 142, "stroke": "net_shot", "hitter": "lower", "rally": 1},
+    ]
+    cleaned = prune_trailing_phantom_hits(predictions, fps=30.0)
+    assert len(cleaned) == 2
+    assert cleaned[-1]["hitter"] == "upper"
+    assert cleaned[-1]["stroke"] == "smash"
+
+
+def test_resolve_rally_winner_recognizes_decisive_drop():
+    from ai_classifier.analytics.match_analysis import resolve_rally_winner
+
+    hits = [
+        {"frame": 100, "stroke": "serve", "hitter": "lower", "confidence": 0.99},
+        {"frame": 140, "stroke": "drop", "hitter": "upper", "confidence": 0.88},
+    ]
+    winner, reason = resolve_rally_winner(hits)
+    assert winner == "upper"
+    assert reason == "winner_drop"
 

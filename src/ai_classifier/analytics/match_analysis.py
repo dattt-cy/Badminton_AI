@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from typing import Any
 
-ATTACK_STROKES = {"smash", "net_attack", "drive"}
+ATTACK_AND_WINNING_STROKES = {"smash", "net_attack", "drive", "drop"}
 DEFENCE_STROKES = {"lift", "clear"}
 NET_STROKES = {"net_shot", "net_attack"}
 
@@ -43,12 +43,12 @@ def resolve_rally_winner(hits: list[dict[str, Any]]) -> tuple[str, str]:
     last_stroke = last_hit.get("stroke", "net_shot")
     last_conf = float(last_hit.get("confidence", 0.8))
 
-    # If the final shot was a decisive attacking shot
-    if last_stroke in ATTACK_STROKES and last_conf >= 0.70:
+    # If the final shot was a decisive attacking or placed winning shot (smash, drop, drive, net_attack)
+    if last_stroke in ATTACK_AND_WINNING_STROKES and last_conf >= 0.65:
         return last_hitter, f"winner_{last_stroke}"
     
-    # If the final shot was net_shot with high confidence near rally end
-    if last_stroke == "net_shot" and last_conf >= 0.85 and len(hits) > 2:
+    # If the final shot was net_shot with reliable confidence near rally end
+    if last_stroke == "net_shot" and last_conf >= 0.60 and len(hits) >= 2:
         return last_hitter, "winner_net_shot"
     
     # Otherwise, opponent usually forced an error or final defensive return was missed/out
