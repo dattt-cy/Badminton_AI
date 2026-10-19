@@ -29,7 +29,7 @@ def opponent_of(hitter: str) -> str:
 
 def resolve_rally_winner(hits: list[dict[str, Any]]) -> tuple[str, str]:
     """Infer the rally winner and end reason based on final stroke dynamics.
-    
+
     Returns:
         tuple (winner_side, reason):
         - winner_side: 'upper' or 'lower'
@@ -62,50 +62,111 @@ def analyze_scoreboard(
     fps: float = 30.0,
     total_frames: int | None = None,
     edge_window_seconds: float = 5.0,
+    scoreboard_ocr: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Estimate rally outcomes without presenting them as official scores.
-
-    Rally winners cannot be observed reliably from strokes alone because the
-    final contact may be an error. Edge rallies are also commonly truncated by
-    video clipping, so they are marked incomplete and excluded from the score.
-    """
+    """Estimate rally outcomes and align scores with OCR scoreboard evidence & Badminton server rules."""
     names = player_names or {"upper": "Upper Player", "lower": "Lower Player"}
     rallies_dict: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for p in predictions:
         r_id = int(p.get("rally", 1))
         rallies_dict[r_id].append(p)
 
-    score_upper = 0
-    score_lower = 0
-    rally_summaries = []
+    rally_keys = sorted(rallies_dict.keys())
+    ocr_events: list[dict[str, Any]] = (scoreboard_ocr or {}).get("events", []) if isinstance(scoreboard_ocr, dict) else []
+    initial_score = (scoreboard_ocr or {}).get("initial_score") if isinstance(scoreboard_ocr, dict) else None
+    
+    if initial_score and isinstance(initial_score, (list, tuple)) and len(initial_score) == 2:
+        curr_score = [int(initial_score[0]), int(initial_score[1])]
+    else:
+        curr_score = [0, 0]
 
-    for r_id in sorted(rallies_dict.keys()):
+    used_ocr_idx: set[int] = set()
+    rally_summaries: list[dict[str, Any]] = []
+
+    for i, r_id in enumerate(rally_keys):
         hits = rallies_dict[r_id]
         start_frame = int(hits[0].get("refined_frame", hits[0].get("frame", 0)))
         end_frame = int(hits[-1].get("refined_frame", hits[-1].get("frame", 0)))
         dur_seconds = round((end_frame - start_frame) / fps, 2) if end_frame >= start_frame else 0.0
+        start_sec = round(start_frame / fps, 2)
+        end_sec = round(end_frame / fps, 2)
 
-        winner, reason = resolve_rally_winner(hits)
+        next_start_sec = (
+            round(int(rallies_dict[rally_keys[i + 1]][0].get("refined_frame", rallies_dict[rally_keys[i + 1]][0].get("frame", 0))) / fps, 2)
+            if i + 1 < len(rally_keys)
+            else end_sec + 30.0
+        )
+
         starts_near_video_edge = start_frame <= edge_window_seconds * fps
         ends_near_video_edge = (
             total_frames is not None
             and total_frames - 1 - end_frame <= edge_window_seconds * fps
         )
-        partial_start = r_id == min(rallies_dict) and starts_near_video_edge and hits[0].get("stroke") != "serve"
-        partial_end = r_id == max(rallies_dict) and ends_near_video_edge
-        complete = not partial_start and not partial_end
+        partial_start = r_id == min(rally_keys) and starts_near_video_edge and hits[0].get("stroke") != "serve"
+        partial_end = r_id == max(rally_keys) and ends_near_video_edge
 
-        if complete:
-            if winner == "upper":
-                score_upper += 1
-            elif winner == "lower":
-                score_lower += 1
+        # 1. Check for matching OCR event occurring at or immediately after this rally
+        matched_ev = None
+        for ev_idx, ev in enumerate(ocr_events):
+            ev_time = float(ev.get("time_seconds", 0.0))
+            if ev_idx not in used_ocr_idx and (end_sec - 3.0) <= ev_time <= (next_start_sec + 5.0):
+                matched_ev = ev
+                used_ocr_idx.add(ev_idx)
+                break
+
+        if matched_ev:
+            point_w = matched_ev.get("point_winner", "first")
+            winner = "upper" if point_w in ("first", "upper") else "lower"
+            reason = f"ocr_confirmed_{winner}"
+            curr_score = [int(matched_ev["score"][0]), int(matched_ev["score"][1])]
+            complete = True
+            is_estimated = False
+        elif i == 0 and ocr_events and end_sec < float(ocr_events[0].get("time_seconds", 0.0)):
+            # First rally in video ending before first detected score change
+            prev_s = ocr_events[0].get("previous_score", initial_score or [0, 0])
+            curr_score = [int(prev_s[0]), int(prev_s[1])]
+            stroke_winner, stroke_reason = resolve_rally_winner(hits)
+            winner = "upper" if curr_score[0] > curr_score[1] else ("lower" if curr_score[1] > curr_score[0] else stroke_winner)
+            reason = stroke_reason if winner == stroke_winner else f"initial_ocr_{winner}"
+            complete = True
+            is_estimated = False
+        else:
+            # Check if this is a non-scoring toss or shuttlecock retrieval between rallies
+            if len(hits) < 3 and hits[0].get("stroke") != "serve":
+                complete = False
+                winner = "unknown"
+                reason = "non_scoring_exchange"
+                is_estimated = True
+            else:
+                stroke_winner, stroke_reason = resolve_rally_winner(hits)
+                # 2. Badminton Next-Rally Server Rule: The winner of rally k serves in rally k+1
+                next_server = None
+                if i + 1 < len(rally_keys):
+                    next_hits = rallies_dict[rally_keys[i + 1]]
+                    next_server = next_hits[0].get("hitter")
+
+                if next_server in ("upper", "lower"):
+                    winner = next_server
+                    if winner == stroke_winner:
+                        reason = stroke_reason
+                    else:
+                        reason = "next_rally_server"
+                else:
+                    winner, reason = stroke_winner, stroke_reason
+
+                complete = not partial_start and not partial_end
+                if complete:
+                    if winner == "upper":
+                        curr_score[0] += 1
+                    elif winner == "lower":
+                        curr_score[1] += 1
+                is_estimated = True
 
         server = hits[0].get("hitter", "unknown")
         rally_summaries.append({
             "rally_id": r_id,
-            "start_time_seconds": round(start_frame / fps, 2),
-            "end_time_seconds": round(end_frame / fps, 2),
+            "start_time_seconds": start_sec,
+            "end_time_seconds": end_sec,
             "duration_seconds": dur_seconds,
             "hits_count": len(hits),
             "server": server,
@@ -113,25 +174,25 @@ def analyze_scoreboard(
             "winner": winner,
             "winner_name": names.get(winner, winner),
             "win_reason": reason,
-            "winner_is_estimated": True,
+            "winner_is_estimated": is_estimated,
             "is_complete": complete,
             "partial_start": partial_start,
             "partial_end": partial_end,
             "included_in_estimated_score": complete,
-            "score_upper": score_upper,
-            "score_lower": score_lower,
-            "score_text": f"{score_upper} - {score_lower}",
+            "score_upper": curr_score[0],
+            "score_lower": curr_score[1],
+            "score_text": f"{curr_score[0]} - {curr_score[1]}",
             "stroke_sequence": [h.get("stroke", "unknown") for h in hits],
         })
 
     return {
         "estimated_score": {
-            "upper": score_upper,
-            "lower": score_lower,
-            "text": f"{score_upper} - {score_lower}",
-            "leader": "upper" if score_upper > score_lower else ("lower" if score_lower > score_upper else "draw"),
-            "is_estimate": True,
-            "method": "heuristic_rally_outcome",
+            "upper": curr_score[0],
+            "lower": curr_score[1],
+            "text": f"{curr_score[0]} - {curr_score[1]}",
+            "leader": "upper" if curr_score[0] > curr_score[1] else ("lower" if curr_score[1] > curr_score[0] else "draw"),
+            "is_estimate": not bool(ocr_events),
+            "method": "calibrated_ocr_with_server_rule" if ocr_events else "badminton_server_rule_and_heuristics",
             "complete_rallies_counted": sum(r["included_in_estimated_score"] for r in rally_summaries),
         },
         "rallies": rally_summaries,
@@ -571,6 +632,7 @@ def build_match_analysis(
     *,
     fps: float = 30.0,
     total_frames: int | None = None,
+    scoreboard_ocr: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Single-call API to generate full CoachAI-aligned tactical intelligence."""
     scoreboard = analyze_scoreboard(
@@ -578,6 +640,7 @@ def build_match_analysis(
         player_names,
         fps=fps,
         total_frames=total_frames,
+        scoreboard_ocr=scoreboard_ocr,
     )
     patterns = extract_tactical_patterns(predictions)
     spatial = analyze_spatial_court_grid(predictions)
