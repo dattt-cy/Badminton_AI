@@ -36,6 +36,7 @@ from ai_classifier.analytics import (  # noqa: E402
     assign_rallies,
     build_stroke_analytics,
     build_match_analysis,
+    calibrate_bwf_scoreboard_roi,
     extract_score_events,
     suppress_weak_duplicate_serves,
 )
@@ -295,6 +296,8 @@ def analyze_badminton_video(
                 "hitter_name": player_upper if event.side == "upper" else player_lower,
                 "hit_score": round(float(event.score), 4),
                 "stroke": detail["stroke"],
+                "stroke_side": detail.get("stroke_side", "unknown"),
+                "stroke_side_confidence": round(float(detail.get("stroke_side_confidence", 0.0)), 4),
                 "confidence": round(float(detail["confidence"]), 4),
                 "top2": detail["top2"],
                 "tta_used": bool(detail.get("tta_used", False)),
@@ -344,6 +347,29 @@ def analyze_badminton_video(
     rally_time = time.time() - t0_rally
     print(f"[+] Segmented into {rally_count} rallies ({rally_time:.2f}s)")
 
+    # 4.5 Scoreboard OCR Evidence Detection
+    scoreboard_ocr = {"enabled": False, "reason": "score_roi_not_configured"}
+    effective_score_roi = score_roi
+    if effective_score_roi is None and auto_ocr:
+        effective_score_roi = calibrate_bwf_scoreboard_roi(height, width)
+    if effective_score_roi is not None:
+        try:
+            print(f"[*] Scanning BWF broadcast scoreboard ROI {effective_score_roi} with EasyOCR...")
+            scoreboard_ocr = extract_score_events(
+                video_path,
+                effective_score_roi,
+                sample_interval_frames=score_ocr_interval,
+            )
+            print(
+                f"[+] Scoreboard OCR: {scoreboard_ocr.get('successful_reads', 0)} reads, "
+                f"initial={scoreboard_ocr.get('initial_score')}, "
+                f"events={len(scoreboard_ocr.get('events', []))}, "
+                f"observed={scoreboard_ocr.get('observed_score')}"
+            )
+        except Exception as ocr_err:
+            print(f"[!] Warning: Scoreboard OCR scan skipped or failed ({ocr_err})")
+            scoreboard_ocr = {"enabled": False, "reason": str(ocr_err)}
+
     # 5. CoachAI Tactical Analytics
     print("\n--- STEP 5/5: COACH-AI TACTICAL ANALYSIS ---")
     t0_tactics = time.time()
@@ -353,30 +379,9 @@ def analyze_badminton_video(
         player_names=player_names,
         fps=fps,
         total_frames=total_frames,
+        scoreboard_ocr=scoreboard_ocr,
     )
     tactics_time = time.time() - t0_tactics
-
-    scoreboard_ocr = {"enabled": False, "reason": "score_roi_not_configured"}
-    effective_score_roi = score_roi
-    if effective_score_roi is None and auto_ocr:
-        # Standard BWF broadcast scoreboard overlay ROI scaled to frame resolution
-        effective_score_roi = (
-            int(40 * height / 720),
-            int(110 * height / 720),
-            int(410 * width / 1280),
-            int(445 * width / 1280),
-        )
-    if effective_score_roi is not None:
-        try:
-            print(f"[*] Scanning BWF broadcast scoreboard ROI {effective_score_roi} with EasyOCR...")
-            scoreboard_ocr = extract_score_events(
-                video_path,
-                effective_score_roi,
-                sample_interval_frames=score_ocr_interval,
-            )
-        except Exception as ocr_err:
-            print(f"[!] Warning: Scoreboard OCR scan skipped or failed ({ocr_err})")
-            scoreboard_ocr = {"enabled": False, "reason": str(ocr_err)}
 
     total_time = time.time() - started_total
     duration_seconds = round(total_frames / fps, 2)

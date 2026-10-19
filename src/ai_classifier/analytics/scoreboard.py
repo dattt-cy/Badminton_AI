@@ -18,6 +18,16 @@ import cv2
 Score = tuple[int, int]
 
 
+def calibrate_bwf_scoreboard_roi(height: int, width: int) -> tuple[int, int, int, int]:
+    """Calculate calibrated BWF broadcast scoreboard score digits ROI (y1, y2, x1, x2)."""
+    return (
+        int(round(45 * height / 720)),
+        int(round(90 * height / 720)),
+        int(round(410 * width / 1280)),
+        int(round(442 * width / 1280)),
+    )
+
+
 def read_score_from_frame(
     frame: Any,
     roi: tuple[int, int, int, int],
@@ -33,19 +43,21 @@ def read_score_from_frame(
 
     crop = frame[y1:y2, x1:x2]
     enlarged = cv2.resize(crop, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
-    gray = cv2.cvtColor(enlarged, cv2.COLOR_BGR2GRAY)
-    _, binary = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY)
     results = reader.readtext(
-        binary, allowlist="0123456789", detail=1, paragraph=False
+        enlarged, allowlist="0123456789", detail=1, paragraph=False
     )
-    numbers: list[str] = []
-    for box, text, _confidence in sorted(results, key=lambda row: min(p[0] for p in row[0])):
+    # Sort boxes vertically (min Y) so Row 1 (upper player) precedes Row 2 (lower player)
+    numbers: list[int] = []
+    for box, text, _confidence in sorted(results, key=lambda row: min(p[1] for p in row[0])):
         del box
-        numbers.extend(re.findall(r"\d+", str(text)))
+        for num_str in re.findall(r"\d+", str(text)):
+            numbers.append(int(num_str))
+
     if len(numbers) >= 2:
-        return int(numbers[0]), int(numbers[1])
-    if len(numbers) == 1 and len(numbers[0]) == 2:
-        return int(numbers[0][0]), int(numbers[0][1])
+        return numbers[0], numbers[1]
+    if len(numbers) == 1 and len(str(numbers[0])) == 2:
+        digits = str(numbers[0])
+        return int(digits[0]), int(digits[1])
     return None
 
 
@@ -104,7 +116,7 @@ def extract_score_events(
     video_path: Path | str,
     roi: tuple[int, int, int, int],
     *,
-    sample_interval_frames: int = 30,
+    sample_interval_frames: int = 25,
     confirmations_required: int = 2,
 ) -> dict[str, Any]:
     """Scan a video ROI and return confirmed score changes."""
