@@ -19,21 +19,79 @@ DEFENCE_STROKES = {"lift", "clear"}
 def suppress_weak_duplicate_serves(
     predictions: list[dict[str, Any]],
     *,
-    max_gap_frames: int = 90,
+    max_gap_frames: int = 75,
     weak_hit_score: float = 0.60,
     minimum_score_advantage: float = 0.15,
     maximum_shuttle_visibility: float = 0.10,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Drop a weak serve immediately followed by stronger serve evidence.
+    """Collapse implausibly close serve predictions to one strongest event.
 
-    A genuine singles rally cannot normally begin with two consecutive serves
-    less than a few seconds apart. The guard only suppresses the weaker event
-    when it also lacks shuttle evidence, keeping the decision auditable.
+    A genuine singles player cannot serve twice within 2.5 seconds. Detector echoes may have high classification
+    confidence, so only checking for a weak first event misses many duplicates.
+    Consecutive serve predictions are clustered by refined contact time and the
+    event with the strongest hit-detector score is retained.  The legacy
+    weak/no-shuttle rule remains as a fallback when a non-serve prediction lies
+    between two serve echoes.
     """
+    if not predictions:
+        return [], []
+
+    serve_indices = [
+        index for index, row in enumerate(predictions)
+        if row.get("stroke") == "serve"
+    ]
+    clusters: list[list[int]] = []
+    for index in serve_indices:
+        frame = int(predictions[index].get("refined_frame", predictions[index].get("frame", 0)))
+        if not clusters:
+            clusters.append([index])
+            continue
+        previous = predictions[clusters[-1][-1]]
+        previous_frame = int(previous.get("refined_frame", previous.get("frame", 0)))
+        hitter = predictions[index].get("hitter")
+        previous_hitter = previous.get("hitter")
+        if (
+            hitter is not None
+            and hitter == previous_hitter
+            and frame - previous_frame <= max_gap_frames
+        ):
+            clusters[-1].append(index)
+        else:
+            clusters.append([index])
+
+    clustered_suppressed: dict[int, dict[str, Any]] = {}
+    for cluster in clusters:
+        if len(cluster) < 2:
+            continue
+        keep_index = max(
+            cluster,
+            key=lambda item: float(predictions[item].get("hit_score", 0.0)),
+        )
+        keeper = predictions[keep_index]
+        keeper_frame = int(keeper.get("refined_frame", keeper.get("frame", 0)))
+        for index in cluster:
+            if index == keep_index:
+                continue
+            row = predictions[index]
+            refined_frame = int(row.get("refined_frame", row.get("frame", 0)))
+            clustered_suppressed[index] = {
+                "frame": int(row.get("frame", refined_frame)),
+                "refined_frame": refined_frame,
+                "hit_score": round(float(row.get("hit_score", 0.0)), 4),
+                "replacement_frame": int(keeper.get("frame", keeper_frame)),
+                "replacement_refined_frame": keeper_frame,
+                "replacement_hit_score": round(float(keeper.get("hit_score", 0.0)), 4),
+                "reason": "duplicate_serve_cluster",
+            }
+
     kept: list[dict[str, Any]] = []
     suppressed: list[dict[str, Any]] = []
     index = 0
     while index < len(predictions):
+        if index in clustered_suppressed:
+            suppressed.append(clustered_suppressed[index])
+            index += 1
+            continue
         current = predictions[index]
         following = predictions[index + 1] if index + 1 < len(predictions) else None
         if following is not None:
