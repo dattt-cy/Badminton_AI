@@ -38,7 +38,10 @@ from ai_classifier.analytics import (  # noqa: E402
     build_match_analysis,
     calibrate_bwf_scoreboard_roi,
     extract_score_events,
+    refine_strokes_by_physics,
     suppress_weak_duplicate_serves,
+    TacticalSequenceDecoder,
+    refine_predictions_by_sequence,
 )
 from ai_classifier.localization import (  # noqa: E402
     rescue_alternating_bridges,
@@ -135,6 +138,42 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--serve-rescue-threshold", type=float, default=0.40)
     parser.add_argument("--bridge-rescue-threshold", type=float, default=0.55)
     parser.add_argument("--no-hit-rescue", action="store_true")
+    parser.add_argument(
+        "--tau",
+        type=float,
+        default=0.20,
+        help="Logit adjustment temperature tau (default 0.20, 0.0 to disable)",
+    )
+    parser.add_argument(
+        "--context-rules",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Apply badminton sport context rules (soft serve rescue and no-mid-rally serve)",
+    )
+    parser.add_argument(
+        "--use-physics-refinement",
+        action="store_true",
+        default=False,
+        help="Enable geometric court and opponent position disambiguation (Drive vs Net Shot, Net Attack vs Lift)",
+    )
+    parser.add_argument(
+        "--use-tactical-decoder",
+        action="store_true",
+        default=True,
+        help="Enable statistical sequence decoding (Turn-taking Viterbi with Laplace smoothing)",
+    )
+    parser.add_argument(
+        "--no-tactical-decoder",
+        dest="use_tactical_decoder",
+        action="store_false",
+        help="Disable statistical sequence decoding",
+    )
+    parser.add_argument(
+        "--tactical-lambda",
+        type=float,
+        default=0.20,
+        help="Transition weight for tactical sequence decoder (default 0.20)",
+    )
     return parser.parse_args()
 
 
@@ -165,6 +204,11 @@ def analyze_badminton_video(
     score_roi: tuple[int, int, int, int] | None = None,
     score_ocr_interval: int = 30,
     auto_ocr: bool = True,
+    use_physics_refinement: bool = False,
+    use_tactical_decoder: bool = True,
+    tactical_lambda: float = 0.20,
+    tau: float = 0.20,
+    context_rules: bool = True,
 ) -> dict[str, Any]:
     """Execute full end-to-end video analysis pipeline and return structured dict."""
     video_path = Path(video_path)
@@ -240,6 +284,7 @@ def analyze_badminton_video(
             orig_w=width,
             orig_h=height,
             pose_model_path=Path(pose_model),
+            tau=tau,
         )
 
         # 3. Shared Pose Cache & KAP Feature Classification
@@ -347,6 +392,47 @@ def analyze_badminton_video(
     rally_time = time.time() - t0_rally
     print(f"[+] Segmented into {rally_count} rallies ({rally_time:.2f}s)")
 
+    # 4.1 Badminton Soft Context Rules (Sport Domain Logic)
+    if context_rules:
+        rule_changes = 0
+        for p in predictions:
+            r = p.get("ball_round", 1)
+            top2 = p.get("top2", [])
+            # Rule 1: Soft serve rescue at rally opening: only if serve in top2
+            if r == 1 and "serve" in top2 and p["stroke"] != "serve":
+                p["stroke"] = "serve"
+                rule_changes += 1
+            # Rule 2: Middle of rally cannot be serve
+            elif r > 1 and p["stroke"] == "serve":
+                p["stroke"] = top2[1] if (len(top2) > 1 and top2[0] == "serve") else (top2[0] if top2 else "net_shot")
+                rule_changes += 1
+        if rule_changes:
+            print(f"[+] Badminton Context Rules: adjusted {rule_changes} stroke(s) to match sport logic")
+
+    # 4.2 Geometric & Physics Disambiguation (Drive vs Net Shot, Net Attack vs Lift)
+    physics_changes: list[dict[str, Any]] = []
+    if use_physics_refinement:
+        predictions, physics_changes = refine_strokes_by_physics(predictions)
+        if physics_changes:
+            print(f"[+] Physics Refinement: disambiguated {len(physics_changes)} ambiguous shot(s):")
+            for ch in physics_changes:
+                print(f"    - Frame {ch['frame']}: {ch['original_stroke']} -> {ch['refined_stroke']} ({ch['reason']})")
+        else:
+            print("[+] Physics Refinement: all predictions physically consistent (0 changes)")
+
+    # 4.3 Tactical Sequence Decoding (Turn-taking Viterbi with Laplace smoothing)
+    sequence_changes: list[dict[str, Any]] = []
+    if use_tactical_decoder:
+        manifest_p = REPO_ROOT / "data" / "manifests" / "shuttleset_rgb.csv"
+        decoder = TacticalSequenceDecoder(manifest_p, alpha=0.5, default_lambda=tactical_lambda)
+        predictions, sequence_changes = refine_predictions_by_sequence(predictions, decoder, lam=tactical_lambda)
+        if sequence_changes:
+            print(f"[+] Tactical Sequence Decoder: refined {len(sequence_changes)} ambiguous shot(s):")
+            for ch in sequence_changes:
+                print(f"    - Frame {ch['frame']}: {ch['original_stroke']} -> {ch['refined_stroke']}")
+        else:
+            print("[+] Tactical Sequence Decoder: all predictions sequence-consistent (0 changes)")
+
     # 4.5 Scoreboard OCR Evidence Detection
     scoreboard_ocr = {"enabled": False, "reason": "score_roi_not_configured"}
     effective_score_roi = score_roi
@@ -402,6 +488,8 @@ def analyze_badminton_video(
         "low_confidence_hits": sum(p["confidence"] < 0.70 for p in predictions),
         "landing_is_2d_proxy": True,
         "suppressed_weak_duplicate_serves": len(suppressed_duplicate_serves),
+        "physics_refinement_enabled": bool(use_physics_refinement),
+        "physics_refinement_count": len(physics_changes),
     }
 
     result = {
@@ -435,6 +523,8 @@ def analyze_badminton_video(
         "scoreboard_ocr": scoreboard_ocr,
         "suppression_audit": {
             "weak_duplicate_serves": suppressed_duplicate_serves,
+            "physics_disambiguations": physics_changes,
+            "tactical_sequence_refinements": sequence_changes,
         },
         "spatial_distribution_3x3": tactics["spatial_distribution_3x3"],
         "player_profiles": tactics.get("player_profiles", {}),
@@ -498,6 +588,11 @@ def main() -> None:
         score_roi=tuple(args.score_roi) if args.score_roi else None,
         score_ocr_interval=args.score_ocr_interval,
         auto_ocr=args.auto_ocr,
+        use_physics_refinement=args.use_physics_refinement,
+        use_tactical_decoder=args.use_tactical_decoder,
+        tactical_lambda=args.tactical_lambda,
+        tau=args.tau,
+        context_rules=args.context_rules,
     )
 
 

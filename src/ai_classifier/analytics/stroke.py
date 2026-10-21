@@ -420,3 +420,84 @@ def prune_trailing_phantom_hits(
 
     return kept
 
+
+def refine_strokes_by_physics(
+    predictions: list[dict[str, Any]],
+    *,
+    drive_net_threshold: float = 0.235,
+    net_attack_backcourt_threshold: float = 0.40,
+    net_attack_max_confidence: float = 0.70,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Refine ambiguous stroke predictions using physical court geometry and opponent reception context.
+
+    Disambiguation rules:
+    1. Drive vs Net Shot:
+       If the model predicts 'drive' with 'net_shot' in top2, but the opponent receives
+       the shuttle right next to the net (|y - 0.5| <= drive_net_threshold), the shot
+       is geometrically a net_shot (drop/net play), not a flat drive.
+    2. Net Attack vs Lift:
+       If the model predicts 'net_attack' with low confidence (< net_attack_max_confidence)
+       and 'lift' in top2, but the opponent is forced all the way back to the deep baseline
+       (|y - 0.5| >= net_attack_backcourt_threshold), the shot is physically a lift/clear,
+       not a net push.
+
+    Returns:
+        (refined_predictions, audit_log_of_changes)
+    """
+    changes: list[dict[str, Any]] = []
+    n = len(predictions)
+
+    for i in range(n):
+        curr = predictions[i]
+        nxt = predictions[i + 1] if i + 1 < n else None
+
+        # Only apply physical disambiguation when next hit exists in the same rally
+        if nxt is None or curr.get("rally") != nxt.get("rally"):
+            continue
+
+        nxt_analytics = nxt.get("analytics") or {}
+        nxt_pos = nxt_analytics.get("player_position_court")
+        if not nxt_pos or len(nxt_pos) < 2:
+            continue
+
+        dist_net = abs(float(nxt_pos[1]) - 0.5)
+        st = curr.get("stroke")
+        t2 = curr.get("top2") or []
+        cf = float(curr.get("confidence", 0.0))
+
+        # Rule 1: Drive -> Net Shot
+        if st == "drive" and "net_shot" in t2 and dist_net <= drive_net_threshold:
+            old_st = st
+            curr["stroke"] = "net_shot"
+            curr["physics_refined"] = True
+            changes.append({
+                "hit_index": curr.get("hit_index"),
+                "frame": curr.get("frame"),
+                "original_stroke": old_st,
+                "refined_stroke": "net_shot",
+                "reason": f"Opponent received at net (dist_to_net={dist_net:.3f} <= {drive_net_threshold})",
+            })
+
+        # Rule 2: Net Attack -> Lift
+        elif (
+            st == "net_attack"
+            and "lift" in t2
+            and cf < net_attack_max_confidence
+            and dist_net >= net_attack_backcourt_threshold
+        ):
+            old_st = st
+            curr["stroke"] = "lift"
+            curr["physics_refined"] = True
+            changes.append({
+                "hit_index": curr.get("hit_index"),
+                "frame": curr.get("frame"),
+                "original_stroke": old_st,
+                "refined_stroke": "lift",
+                "reason": (
+                    f"Opponent received at deep baseline (dist_to_net={dist_net:.3f} >= {net_attack_backcourt_threshold}, "
+                    f"model_conf={cf:.2f} < {net_attack_max_confidence})"
+                ),
+            })
+
+    return predictions, changes
+
