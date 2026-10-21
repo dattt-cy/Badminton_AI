@@ -6,7 +6,7 @@ extracts frozen embeddings, and evaluates matches 39, 40, 42, 43, and 44.
 """
 from __future__ import annotations
 
-import argparse, csv, json, sys
+import argparse, copy, csv, json, sys
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT / "src")]
 from ai_classifier.models import KAPScratchModel, SIDE_CLASSES, STROKE_CLASSES
 from ai_classifier.features import modality_quality_vector
+from ai_classifier.analytics import refine_strokes_by_physics
 from scripts.training.train_kap_scratch import confusion_metrics
 
 TEST_MATCHES = {"39", "40", "42", "43", "44"}
@@ -44,6 +45,7 @@ def args():
     p.add_argument("--kap-checkpoint",type=Path,default=ROOT/"work_dirs/kap_robust_seed20260926/kap_best.pth")
     p.add_argument("--pose-model",type=Path,default=ROOT/"models/checkpoints/pose/yolov8n-pose.pt")
     p.add_argument("--old-features",type=Path,default=ROOT/"work_dirs/cr_gated_fusion/sequence_features.npz")
+    p.add_argument("--eval-feature-cache",type=Path,default=ROOT/"work_dirs/kap_full_test5_features.npz")
     p.add_argument("--output",type=Path,default=ROOT/"work_dirs/kap_full_test5_evaluation.json")
     return p.parse_args()
 
@@ -149,33 +151,56 @@ def main():
             if i%25==0 or i==len(missing):print(f"cache={i}/{len(missing)}",flush=True)
     device=torch.device("cuda" if torch.cuda.is_available() else "cpu");print(f"device={device}",flush=True)
     rgb_model=RGB();rgb_model.load_state_dict(torch.load(a.rgb_checkpoint,map_location="cpu",weights_only=False)["model"]);rgb_model.to(device).eval()
-    old=np.load(a.old_features);old_ids=old["sample_id"];old_rgb=old["rgb"]
-    oldmap={str(x):old_rgb[i] for i,x in enumerate(old_ids)}
-    emb=[]
-    with torch.inference_mode():
-        for start in range(0,len(rows),2):
-            batch=rows[start:start+2]; vals=[]; todo=[]
-            for i,r in enumerate(batch):
-                if r.sample_id in oldmap:vals.append(oldmap[r.sample_id])
-                else:vals.append(None);todo.append(i)
-            if todo:
-                clips=torch.stack([norm_clip(a.rgb_cache/f"{batch[i].sample_id}.npy") for i in todo]).to(device)
-                with torch.autocast(device_type=device.type,dtype=torch.float16,enabled=device.type=="cuda"):new=rgb_model.backbone(clips).float().cpu().numpy()
-                for i,v in zip(todo,new):vals[i]=v
-            emb.extend(vals)
-            if start%100==0:print(f"embedding={min(start+2,len(rows))}/{len(rows)}",flush=True)
-    posev=[];courtv=[];shuttlev=[];contactv=[];qualityv=[]
-    for r in rows:
-        j=np.load(a.npy_root/r.joints);p=np.load(a.npy_root/r.position);s=np.load(a.npy_root/r.shuttle)
-        x=extract_sample_sequences(j,p,s,targets[r.sample_id]);posev.append(x[0]);courtv.append(x[1]);shuttlev.append(x[2]);contactv.append(x[3]);qualityv.append(x[4])
+    old=np.load(a.old_features)
+    oldmap={}
+    if "sample_id" in old.files and "rgb" in old.files:
+        old_ids=old["sample_id"];old_rgb=old["rgb"]
+        oldmap={str(x):old_rgb[i] for i,x in enumerate(old_ids)}
+    else:
+        print("old feature cache has no sample_id; recomputing RGB embeddings",flush=True)
+    if a.eval_feature_cache.is_file():
+        cached=np.load(a.eval_feature_cache)
+        expected=np.asarray([r.sample_id for r in rows])
+        if not np.array_equal(cached["sample_id"],expected):raise RuntimeError("evaluation feature cache sample order mismatch")
+        emb,posev,courtv,shuttlev,contactv,qualityv,hitter_positions=[cached[k] for k in ("emb","pose","court","shuttle","contact","quality","hitter_positions")]
+        print(f"loaded evaluation features: {a.eval_feature_cache}",flush=True)
+    else:
+        emb=[]
+        batch_size=32 if device.type=="cuda" else 2
+        with torch.inference_mode():
+            for start in range(0,len(rows),batch_size):
+                batch=rows[start:start+batch_size]; vals=[]; todo=[]
+                for i,r in enumerate(batch):
+                    if r.sample_id in oldmap:vals.append(oldmap[r.sample_id])
+                    else:vals.append(None);todo.append(i)
+                if todo:
+                    clips=torch.stack([norm_clip(a.rgb_cache/f"{batch[i].sample_id}.npy") for i in todo]).to(device)
+                    with torch.autocast(device_type=device.type,dtype=torch.float16,enabled=device.type=="cuda"):new=rgb_model.backbone(clips).float().cpu().numpy()
+                    for i,v in zip(todo,new):vals[i]=v
+                emb.extend(vals)
+                if start%(batch_size*10)==0:print(f"embedding={min(start+batch_size,len(rows))}/{len(rows)}",flush=True)
+        posev=[];courtv=[];shuttlev=[];contactv=[];qualityv=[];hitter_positions=[]
+        for r in rows:
+            j=np.load(a.npy_root/r.joints);p=np.load(a.npy_root/r.position);s=np.load(a.npy_root/r.shuttle)
+            x=extract_sample_sequences(j,p,s,targets[r.sample_id]);posev.append(x[0]);courtv.append(x[1]);shuttlev.append(x[2]);contactv.append(x[3]);qualityv.append(x[4])
+            contact_court=np.asarray(p[min(max(targets[r.sample_id],0),len(p)-1)]).reshape(-1)
+            hitter_positions.append(contact_court[:2] if r.player_side=="top" else contact_court[2:4])
+        a.eval_feature_cache.parent.mkdir(parents=True,exist_ok=True)
+        np.savez_compressed(a.eval_feature_cache,sample_id=np.asarray([r.sample_id for r in rows]),emb=np.asarray(emb),pose=np.asarray(posev),court=np.asarray(courtv),shuttle=np.asarray(shuttlev),contact=np.asarray(contactv),quality=np.asarray(qualityv),hitter_positions=np.asarray(hitter_positions))
+        print(f"saved evaluation features: {a.eval_feature_cache}",flush=True)
     kap=KAPScratchModel();payload=torch.load(a.kap_checkpoint,map_location=device,weights_only=False);kap.load_state_dict(payload["model"]);kap.to(device).eval()
     arrays=[np.asarray(x,dtype=np.float32) for x in (emb,posev,courtv,shuttlev,contactv,qualityv)];ys=np.array([STROKE_CLASSES.index(r.stroke) for r in rows]);yd=np.array([SIDE_CLASSES.index(r.side) for r in rows])
-    cm_s=torch.zeros(8,8,dtype=torch.int64);cm_d=torch.zeros(3,3,dtype=torch.int64);per={m:{"stroke":torch.zeros(8,8,dtype=torch.int64),"side":torch.zeros(3,3,dtype=torch.int64)} for m in TEST_MATCHES}
+    cm_s=torch.zeros(8,8,dtype=torch.int64);cm_d=torch.zeros(3,3,dtype=torch.int64);per={m:{"stroke":torch.zeros(8,8,dtype=torch.int64),"side":torch.zeros(3,3,dtype=torch.int64)} for m in TEST_MATCHES}; predictions=[]
     with torch.inference_mode():
         for start in range(0,len(rows),128):
-            ids=range(start,min(start+128,len(rows)));inp=[torch.from_numpy(x[start:start+128]).to(device) for x in arrays];os,od,_=kap(*inp);ps=os.argmax(1).cpu();pd=od.argmax(1).cpu()
+            ids=range(start,min(start+128,len(rows)));inp=[torch.from_numpy(x[start:start+128]).to(device) for x in arrays];os,od,_=kap(*inp);probs=os.softmax(1).cpu();ps=probs.argmax(1);pd=od.argmax(1).cpu()
             for k,i in enumerate(ids):
                 cm_s[ys[i],ps[k]]+=1;cm_d[yd[i],pd[k]]+=1;m=rows[i].match_id;per[m]["stroke"][ys[i],ps[k]]+=1;per[m]["side"][yd[i],pd[k]]+=1
-    result={"protocol":"frozen_epoch19_full_five_match_test","checkpoint_epoch":payload["epoch"],"test_matches":sorted(TEST_MATCHES),"samples":len(rows),"stroke":confusion_metrics(cm_s),"side":confusion_metrics(cm_d),"per_match":{m:{"samples":sum(r.match_id==m for r in rows),"stroke":confusion_metrics(v["stroke"]),"side":confusion_metrics(v["side"])} for m,v in per.items()}}
-    a.output.write_text(json.dumps(result,indent=2)+"\n",encoding="utf-8");print(json.dumps({"samples":result["samples"],"stroke":{k:result["stroke"][k] for k in ("accuracy","balanced_accuracy","macro_f1")},"side":{k:result["side"][k] for k in ("accuracy","balanced_accuracy","macro_f1")}},indent=2),flush=True)
+                top2=torch.topk(probs[k],2).indices.tolist();r=rows[i]
+                predictions.append({"hit_index":i,"frame":r.hit,"rally":f"{r.match_id}:{r.set_id}:{r.rally}","stroke":STROKE_CLASSES[int(ps[k])],"top2":[STROKE_CLASSES[j] for j in top2],"confidence":float(probs[k,int(ps[k])]),"analytics":{"player_position_court":[float(v) for v in hitter_positions[i]]}})
+    refined,changes=refine_strokes_by_physics(copy.deepcopy(predictions))
+    cm_physics=torch.zeros(8,8,dtype=torch.int64)
+    for i,row in enumerate(refined):cm_physics[ys[i],STROKE_CLASSES.index(row["stroke"])]+=1
+    result={"protocol":"production_checkpoint_full_five_match_test","checkpoint_epoch":payload["epoch"],"test_matches":sorted(TEST_MATCHES),"samples":len(rows),"stroke":confusion_metrics(cm_s),"side":confusion_metrics(cm_d),"physics_refinement":{"enabled":True,"change_count":len(changes),"stroke":confusion_metrics(cm_physics),"changes":changes},"per_match":{m:{"samples":sum(r.match_id==m for r in rows),"stroke":confusion_metrics(v["stroke"]),"side":confusion_metrics(v["side"])} for m,v in per.items()}}
+    a.output.write_text(json.dumps(result,indent=2)+"\n",encoding="utf-8");print(json.dumps({"samples":result["samples"],"stroke":{k:result["stroke"][k] for k in ("accuracy","balanced_accuracy","macro_f1")},"stroke_with_physics":{k:result["physics_refinement"]["stroke"][k] for k in ("accuracy","balanced_accuracy","macro_f1")},"physics_changes":len(changes),"side":{k:result["side"][k] for k in ("accuracy","balanced_accuracy","macro_f1")}},indent=2),flush=True)
 if __name__=="__main__":main()
