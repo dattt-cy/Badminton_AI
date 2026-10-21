@@ -2,8 +2,10 @@ from .stroke import (
     assign_rallies,
     build_stroke_analytics,
     prune_trailing_phantom_hits,
+    refine_strokes_by_physics,
     suppress_weak_duplicate_serves,
 )
+from .tactical_decoder import TacticalSequenceDecoder, refine_predictions_by_sequence
 from .match_analysis import (
     analyze_scoreboard,
     build_match_analysis,
@@ -18,7 +20,10 @@ __all__ = [
     "assign_rallies",
     "build_stroke_analytics",
     "prune_trailing_phantom_hits",
+    "refine_strokes_by_physics",
     "suppress_weak_duplicate_serves",
+    "TacticalSequenceDecoder",
+    "refine_predictions_by_sequence",
     "build_tactical_analytics",
     "build_match_analysis",
     "analyze_scoreboard",

@@ -105,9 +105,11 @@ class AlignedVideoPipeline:
         orig_w: int = 1280,
         orig_h: int = 720,
         pose_model_path: str | Path = "models/checkpoints/pose/yolov8x-pose.pt",
+        tau: float = 0.0,
     ):
         self.orig_w = orig_w
         self.orig_h = orig_h
+        self.tau = float(tau)
         corners = corners if corners is not None else COURT_CORNERS_PROFILE["default"]
         self.h_mat = cv2.getPerspectiveTransform(corners, DST_PTS)
 
@@ -461,9 +463,10 @@ class AlignedVideoPipeline:
         }
 
     def predict_detailed(
-        self, feat: dict, classifier: KAPScratchModel | None = None
+        self, feat: dict, classifier: KAPScratchModel | None = None, tau: float | None = None
     ) -> dict:
         model = classifier if classifier is not None else self.clf
+        effective_tau = self.tau if tau is None else float(tau)
         with torch.no_grad():
             inputs = (
                 feat["emb"].to(DEVICE), feat["s_j"].to(DEVICE),
@@ -471,6 +474,9 @@ class AlignedVideoPipeline:
                 feat["s_c"].to(DEVICE), feat["s_q"].to(DEVICE),
             )
             logits, _side_logits, _gates = model(*inputs)
+        if effective_tau > 0.0:
+            priors = torch.tensor([0.08, 0.15, 0.12, 0.10, 0.18, 0.07, 0.20, 0.10], device=logits.device)
+            logits = logits - effective_tau * torch.log(priors + 1e-8)
         probs = F.softmax(logits, dim=-1)[0]
         pred_idx = int(logits.argmax(dim=-1).item())
         top2_idx = logits.topk(2, dim=-1).indices[0].tolist()
