@@ -32,8 +32,11 @@ from torchvision.transforms import functional as VF
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+if str(REPO_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from ai_classifier.localization import HitEvent, two_stage_temporal_nms  # noqa: E402
+from ai_classifier.models import BadmintonHitNet, BadmintonHitNetV2  # noqa: E402
 
 CLASSES = ["no_hit", "upper_hit", "lower_hit"]
 
@@ -46,11 +49,36 @@ _STD = torch.tensor([0.22803, 0.22145, 0.216989])
 # ---------------------------------------------------------------------------
 
 def load_model(checkpoint_path: Path) -> tuple[nn.Module, dict]:
-    """Return (model, checkpoint_meta)."""
+    """Return (model, checkpoint_meta).
+    
+    Supports BadmintonHitNetV2, BadmintonHitNet, and legacy R(2+1)D-18.
+    """
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    model = r2plus1d_18(weights=None)
-    model.fc = nn.Linear(model.fc.in_features, len(CLASSES))
-    model.load_state_dict(ckpt["model"])
+    state = ckpt.get("model", ckpt)
+    is_hitnet_v2 = (
+        ckpt.get("arch") == "badminton_hitnet_v2"
+        or "spatial_stage1.0.conv.2.fc.1.weight" in state
+    )
+    is_hitnet = (
+        is_hitnet_v2
+        or ckpt.get("arch") == "badminton_hitnet"
+        or "spatial_stem.0.weight" in state
+        or "spatial_stem.0.conv.weight" in state
+    )
+    if is_hitnet_v2:
+        n_frames = int(ckpt.get("frames", 16))
+        classes = ckpt.get("classes", CLASSES)
+        model = BadmintonHitNetV2(num_classes=len(classes), in_frames=n_frames)
+        model.load_state_dict(state)
+    elif is_hitnet:
+        n_frames = int(ckpt.get("frames", 16))
+        classes = ckpt.get("classes", CLASSES)
+        model = BadmintonHitNet(num_classes=len(classes), in_frames=n_frames)
+        model.load_state_dict(state)
+    else:
+        model = r2plus1d_18(weights=None)
+        model.fc = nn.Linear(model.fc.in_features, len(CLASSES))
+        model.load_state_dict(state)
     return model, ckpt
 
 

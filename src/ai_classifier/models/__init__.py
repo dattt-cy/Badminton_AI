@@ -5,6 +5,7 @@ from pathlib import Path
 from .taxonomy import SIDE_CLASSES, STROKE_CLASSES
 from .multi_task_r2plus1d import MultiTaskR2Plus1D
 from .kap_fusion import KAPScratchModel
+from .badminton_hitnet import BadmintonHitNet, BadmintonHitNetV2
 
 CHECKPOINTS_DIR = Path(__file__).resolve().parent / "checkpoints"
 
@@ -16,6 +17,8 @@ DEFAULT_POSE_MODEL = CHECKPOINTS_DIR / "yolov8n-pose.pt"
 DEFAULT_TRACKNET_MODEL = CHECKPOINTS_DIR / "tracknet_best.pt"
 
 __all__ = [
+    "BadmintonHitNet",
+    "BadmintonHitNetV2",
     "MultiTaskR2Plus1D",
     "KAPScratchModel",
     "STROKE_CLASSES",

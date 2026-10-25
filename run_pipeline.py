@@ -68,25 +68,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--player-upper", type=str, default="Player Upper", help="Name of upper player")
     parser.add_argument("--player-lower", type=str, default="Player Lower", help="Name of lower player")
 
-    # Canonical production model checkpoints in src
+    # Canonical production model checkpoints in src (Hit Detector: BadmintonHitNetV2)
     ckpts = REPO_ROOT / "src" / "ai_classifier" / "models" / "checkpoints"
-    hit_default = (ckpts / "hit_detector.pth") if (ckpts / "hit_detector.pth").exists() else (REPO_ROOT / "work_dirs" / "r2plus1d18_hit_full" / "best.pth")
+    hit_default = (ckpts / "badminton_hitnet_v2.pth") if (ckpts / "badminton_hitnet_v2.pth").exists() else (ckpts / "hit_detector.pth")
     kap_default = (ckpts / "kap_classifier.pth") if (ckpts / "kap_classifier.pth").exists() else (REPO_ROOT / "work_dirs" / "kap_online_balanced_selection_20261008" / "best.pth")
     pose_default = (ckpts / "yolov8n-pose.pt") if (ckpts / "yolov8n-pose.pt").exists() else (REPO_ROOT / "models" / "checkpoints" / "pose" / "yolov8n-pose.pt")
     rally_default = (ckpts / "rally_boundary_detector.joblib") if (ckpts / "rally_boundary_detector.joblib").exists() else (REPO_ROOT / "work_dirs" / "rally_boundary_detector.joblib")
 
-    parser.add_argument("--hit-checkpoint", type=Path, default=hit_default)
+    parser.add_argument("--hit-checkpoint", type=Path, default=hit_default, help="Hit spotter checkpoint (default: BadmintonHitNetV2)")
     parser.add_argument("--kap-checkpoint", type=Path, default=kap_default)
     parser.add_argument("--pose-model", type=Path, default=pose_default)
     parser.add_argument("--rally-model", type=Path, default=rally_default)
-    parser.add_argument("--threshold", type=float, default=0.75, help="Hit detection score threshold")
+    parser.add_argument("--threshold", type=float, default=0.72, help="Hit detection score threshold")
     parser.add_argument("--stride", type=int, default=4, help="Hit scan frame stride")
     parser.add_argument("--batch-size", type=int, default=8, help="GPU batch size for scan")
-    parser.add_argument("--nms-radius", type=int, default=8, help="First-stage temporal NMS radius")
+    parser.add_argument("--nms-radius", type=int, default=6, help="First-stage temporal NMS radius")
     parser.add_argument(
         "--same-side-nms-radius",
         type=int,
-        default=18,
+        default=20,
         help="Second-stage same-side duplicate suppression radius",
     )
     parser.add_argument(
@@ -135,7 +135,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--tta-confidence-threshold", type=float, default=0.75)
     parser.add_argument("--tta-margin-threshold", type=float, default=0.20)
-    parser.add_argument("--serve-rescue-threshold", type=float, default=0.40)
+    parser.add_argument("--serve-rescue-threshold", type=float, default=0.55)
     parser.add_argument("--bridge-rescue-threshold", type=float, default=0.55)
     parser.add_argument("--no-hit-rescue", action="store_true")
     parser.add_argument(
@@ -174,6 +174,12 @@ def parse_args() -> argparse.Namespace:
         default=0.20,
         help="Transition weight for tactical sequence decoder (default 0.20)",
     )
+    parser.add_argument(
+        "--min-shuttle-visibility",
+        type=float,
+        default=0.25,
+        help="Minimum TrackNet shuttlecock visibility ratio to keep candidate hit (default 0.25, 0.0 to disable)",
+    )
     return parser.parse_args()
 
 
@@ -209,6 +215,7 @@ def analyze_badminton_video(
     tactical_lambda: float = 0.20,
     tau: float = 0.20,
     context_rules: bool = True,
+    min_shuttle_visibility: float = 0.25,
 ) -> dict[str, Any]:
     """Execute full end-to-end video analysis pipeline and return structured dict."""
     video_path = Path(video_path)
@@ -371,6 +378,18 @@ def analyze_badminton_video(
         print(
             f"[+] Suppressed {len(suppressed_duplicate_serves)} weak duplicate serve(s)"
         )
+    if min_shuttle_visibility > 0.0:
+        kept_preds = []
+        pruned_ghost = 0
+        for p in predictions:
+            vis = p.get("analytics", {}).get("shuttle_visibility_ratio", 1.0)
+            if vis is not None and vis < min_shuttle_visibility:
+                pruned_ghost += 1
+                continue
+            kept_preds.append(p)
+        if pruned_ghost > 0:
+            print(f"[+] Pruned {pruned_ghost} phantom candidate(s) with low TrackNet shuttle visibility (< {min_shuttle_visibility:.2f})")
+        predictions = kept_preds
     classify_time = time.time() - t0_classify
     print(f"[+] Classified {len(predictions)} hits ({classify_time:.1f}s)")
 
@@ -593,6 +612,7 @@ def main() -> None:
         tactical_lambda=args.tactical_lambda,
         tau=args.tau,
         context_rules=args.context_rules,
+        min_shuttle_visibility=args.min_shuttle_visibility,
     )
 
 

@@ -18,6 +18,7 @@ data/raw/**
 !data/raw/**/.gitkeep
 !data/raw/README.md
 data/cache/
+data/cache_hit_clips/
 data/interim/*
 data/processed/*
 data/manual_clips/
@@ -27,6 +28,7 @@ models/checkpoints/**
 models/exports/**
 outputs/*
 work_dirs/
+archive_models/
 docs/*.pdf
 
 # Keep directory structure
@@ -40,6 +42,7 @@ docs/*.pdf
 # Common ML artifacts
 *.pt
 *.pth
+*.pth.bak
 *.onnx
 *.engine
 *.pkl
@@ -66,6 +69,9 @@ data/iii-config.yaml
 
 # Local vendor checkouts (use adapters from this repository)
 external/BST-Badminton-Stroke-type-Transformer/
+external/BST_official/
+external/Badminton-Hit-Detection/
+external/TTNet/
 external/TrackNetV3/
 external/BFMD/
 external/CoachAI-Projects/
