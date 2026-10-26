@@ -33,6 +33,7 @@ from ai_classifier.features.hitter_crop import padded_square
 from ai_classifier.models import (
     KAPScratchModel,
     MultiTaskR2Plus1D,
+    SIDE_CLASSES,
     STROKE_CLASSES,
 )
 
@@ -473,16 +474,24 @@ class AlignedVideoPipeline:
                 feat["s_p"].to(DEVICE), feat["s_s"].to(DEVICE),
                 feat["s_c"].to(DEVICE), feat["s_q"].to(DEVICE),
             )
-            logits, _side_logits, _gates = model(*inputs)
+            logits, side_logits, _gates = model(*inputs)
         if effective_tau > 0.0:
             priors = torch.tensor([0.08, 0.15, 0.12, 0.10, 0.18, 0.07, 0.20, 0.10], device=logits.device)
             logits = logits - effective_tau * torch.log(priors + 1e-8)
         probs = F.softmax(logits, dim=-1)[0]
         pred_idx = int(logits.argmax(dim=-1).item())
         top2_idx = logits.topk(2, dim=-1).indices[0].tolist()
+
+        side_probs = F.softmax(side_logits, dim=-1)[0]
+        side_idx = int(side_logits.argmax(dim=-1).item())
+        side_label = SIDE_CLASSES[side_idx]
+        side_conf = float(side_probs[side_idx].item())
+
         return {
             "stroke": STROKE_CLASSES[pred_idx], "confidence": float(probs[pred_idx]),
             "top2": [STROKE_CLASSES[k] for k in top2_idx], "logits": logits[0],
+            "stroke_side": side_label, "stroke_side_confidence": side_conf,
+            "side_logits": side_logits[0],
         }
 
     def predict(self, feat: dict) -> tuple[str, float, list[str], torch.Tensor]:
@@ -622,6 +631,8 @@ class AlignedVideoPipeline:
             "confidence": confidence,
             "top2": top2_classes,
             "logits": torch.log(average.clamp_min(1e-7)),
+            "stroke_side": base_detail.get("stroke_side", "forehand"),
+            "stroke_side_confidence": base_detail.get("stroke_side_confidence", 0.85),
             "tta_used": len(probs_list) > 1,
             "tta_windows": len(probs_list),
         }
