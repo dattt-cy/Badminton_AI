@@ -31,6 +31,8 @@ from ai_classifier.localization.contact_refinement import refine_contact_index
 from ai_classifier.features import modality_quality_vector
 from ai_classifier.features.hitter_crop import padded_square
 from ai_classifier.models import (
+    KAPCrossTransModel,
+    KAPCrossTransV2Model,
     KAPScratchModel,
     MultiTaskR2Plus1D,
     SIDE_CLASSES,
@@ -135,8 +137,15 @@ class AlignedVideoPipeline:
         self.rgb_model.eval()
 
         print(f"[*] Loading robust scratch KAP classifier: {ckpt_path}...")
-        self.clf = KAPScratchModel().to(DEVICE)
         clf_ckpt = torch.load(ckpt_path, map_location=DEVICE, weights_only=False)
+        model_type = clf_ckpt.get("model_type", "baseline")
+        if model_type in ("cross_v2", "cross_v3"):
+            model_class = KAPCrossTransV2Model
+        elif model_type == "cross":
+            model_class = KAPCrossTransModel
+        else:
+            model_class = KAPScratchModel
+        self.clf = model_class().to(DEVICE)
         self.clf.load_state_dict(clf_ckpt["model"])
         self.clf.eval()
 

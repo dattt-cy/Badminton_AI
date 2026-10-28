@@ -28,6 +28,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from ai_classifier.models import (  # noqa: E402
+    KAPCrossTransModel,
+    KAPCrossTransV2Model,
     KAPScratchModel,
     SIDE_CLASSES,
     STROKE_CLASSES,
@@ -73,6 +75,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--noisy-loss-weight", type=float, default=0.75)
     parser.add_argument("--max-temporal-shift", type=int, default=2)
     parser.add_argument("--seed", type=int, default=20260926)
+    parser.add_argument(
+        "--lift-loss-weight", type=float, default=1.0,
+        help="Multiplier for the 'lift' class cross-entropy loss weight.",
+    )
+    parser.add_argument(
+        "--model-type", choices=("baseline", "cross", "cross_v2", "cross_v3"), default="baseline",
+        help="Train canonical KAP, experimental cross v1, v2, or dual-expert cross_v3.",
+    )
     parser.add_argument(
         "--feature-provenance", default="frozen_cached_feature_extractors",
         help="Human-readable provenance recorded in checkpoints and metrics.",
@@ -149,6 +159,10 @@ class VideoDomainAugmentor:
         joint_drop = torch.rand(batch, frames, joints.shape[2], 1, device=pose.device) < 0.035
         joints = joints.masked_fill(joint_drop, 0.0)
         pose = joints.reshape_as(pose)
+        # Whole-trajectory shuttle dropout (forces model to not collapse onto shuttle alone)
+        shuttle_drop_all = (torch.rand(batch, 1, 1, device=pose.device) < 0.15).float()
+        shuttle = shuttle * (1.0 - shuttle_drop_all)
+
         for index in range(batch):
             if torch.rand((), device=pose.device) < 0.60:
                 length = int(torch.randint(2, 7, (), device=pose.device))
@@ -278,7 +292,7 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> tupl
 
 
 def train_kap(
-    model: KAPScratchModel,
+    model: nn.Module,
     train_loader: DataLoader,
     val_loader: DataLoader,
     tensors: dict[str, torch.Tensor],
@@ -287,9 +301,13 @@ def train_kap(
     device: torch.device,
     checkpoint: Path,
 ) -> list[dict]:
-    stroke_loss = nn.CrossEntropyLoss(weight=balanced_weights(
+    stroke_w = balanced_weights(
         tensors["stroke"], train_indices, len(STROKE_CLASSES), device
-    ))
+    )
+    if args.lift_loss_weight != 1.0:
+        stroke_w[5] *= args.lift_loss_weight
+        print(f"[*] Applied lift penalty weight multiplier: x{args.lift_loss_weight:.2f}")
+    stroke_loss = nn.CrossEntropyLoss(weight=stroke_w)
     side_loss = nn.CrossEntropyLoss(weight=balanced_weights(
         tensors["side"], train_indices, len(SIDE_CLASSES), device
     ))
@@ -336,6 +354,7 @@ def train_kap(
             best = score
             torch.save({
                 "model": model.state_dict(), "epoch": epoch,
+                "model_type": args.model_type,
                 "training_mode": "random_initialization_no_external_checkpoint",
                 "external_feature_extractors_trainable": False,
                 "feature_provenance": args.feature_provenance,
@@ -365,7 +384,16 @@ def main() -> None:
     test_loader = make_loader(tensors, indices["test"], args.batch_size, shuffle=False)
 
     kap_checkpoint = args.output_dir / "kap_best.pth"
-    kap = KAPScratchModel()
+    if args.model_type == "baseline":
+        model_class = KAPScratchModel
+    elif args.model_type == "cross":
+        model_class = KAPCrossTransModel
+    elif args.model_type == "cross_v2":
+        model_class = KAPCrossTransV2Model
+    else:
+        # KAPCrossTransV3Model is no longer defined in kap_fusion.py.
+        raise SystemExit("--model-type cross_v3 is unavailable: KAPCrossTransV3Model was removed")
+    kap = model_class()
     kap.set_normalization(**feature_statistics(tensors, indices["train"]))
     kap.to(device)
     kap_history = train_kap(
@@ -379,6 +407,7 @@ def main() -> None:
 
     result = {
         "protocol": "frozen_rgb_features_domain_robust_kap_scratch",
+        "model_type": args.model_type,
         "seed": args.seed,
         "features": str(args.features),
         "feature_provenance": args.feature_provenance,

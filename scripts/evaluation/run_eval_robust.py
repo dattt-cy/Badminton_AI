@@ -35,6 +35,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, default=Path("data/manifests/shuttleset_rgb.csv"))
     parser.add_argument("--match-id", required=True)
     parser.add_argument("--offset", type=int, required=True)
+    parser.add_argument(
+        "--frames", type=int, default=9000,
+        help="Evaluate only this many frames from the start of the supplied clip.",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--kap-checkpoint", type=Path,
@@ -91,6 +95,18 @@ def main() -> None:
     args = parse_args()
     started = time.time()
     scan = json.loads(args.scan.read_text(encoding="utf-8"))
+    if "events" not in scan and "predictions" in scan:
+        # Reuse hit detections from a previous end-to-end pipeline run.  This
+        # keeps classifier A/B comparisons on exactly the same candidate hits
+        # without rerunning the hit spotter.
+        scan["events"] = [
+            {
+                "frame": int(row["frame"]),
+                "side": row.get("hitter", "unknown"),
+                "score": float(row.get("hit_score", 1.0)),
+            }
+            for row in scan["predictions"]
+        ]
     if args.raw_threshold is not None:
         if not scan.get("raw_events"):
             raise ValueError("--raw-threshold requires raw_events in the scan JSON")
@@ -123,6 +139,7 @@ def main() -> None:
         gate_payload = json.loads(args.gate.read_text(encoding="utf-8"))
         live_segments = gate_payload.get("live_segments", [])
         events = [e for e in events if frame_is_live(int(e["frame"]), live_segments)]
+    events = [event for event in events if 0 <= int(event["frame"]) < args.frames]
     gt = []
     with args.manifest.open(encoding="utf-8-sig", newline="") as handle:
         for row in csv.DictReader(handle):
@@ -130,7 +147,7 @@ def main() -> None:
             row_match_id = row.get("match_id", "")
             name = Path(row["video_path"]).name
             same_match = row_match_id == args.match_id or name.startswith(args.match_id + " ")
-            if same_match and args.offset <= absolute < args.offset + 9000:
+            if same_match and args.offset <= absolute < args.offset + args.frames:
                 gt.append({"frame": absolute - args.offset, "stroke": row["coarse_label"]})
     gt.sort(key=lambda row: row["frame"])
 
