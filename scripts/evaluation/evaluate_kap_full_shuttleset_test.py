@@ -21,7 +21,7 @@ from ultralytics import YOLO
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT / "src")]
-from ai_classifier.models import KAPScratchModel, SIDE_CLASSES, STROKE_CLASSES
+from ai_classifier.models import KAPCrossTransModel, KAPScratchModel, SIDE_CLASSES, STROKE_CLASSES
 from ai_classifier.features import modality_quality_vector
 from ai_classifier.analytics import refine_strokes_by_physics
 from scripts.training.train_kap_scratch import confusion_metrics
@@ -47,6 +47,7 @@ def args():
     p.add_argument("--old-features",type=Path,default=ROOT/"work_dirs/cr_gated_fusion/sequence_features.npz")
     p.add_argument("--eval-feature-cache",type=Path,default=ROOT/"work_dirs/kap_full_test5_features.npz")
     p.add_argument("--output",type=Path,default=ROOT/"work_dirs/kap_full_test5_evaluation.json")
+    p.add_argument("--model-type",choices=("baseline","cross"),default="baseline")
     return p.parse_args()
 
 def load_rows(a):
@@ -188,7 +189,8 @@ def main():
         a.eval_feature_cache.parent.mkdir(parents=True,exist_ok=True)
         np.savez_compressed(a.eval_feature_cache,sample_id=np.asarray([r.sample_id for r in rows]),emb=np.asarray(emb),pose=np.asarray(posev),court=np.asarray(courtv),shuttle=np.asarray(shuttlev),contact=np.asarray(contactv),quality=np.asarray(qualityv),hitter_positions=np.asarray(hitter_positions))
         print(f"saved evaluation features: {a.eval_feature_cache}",flush=True)
-    kap=KAPScratchModel();payload=torch.load(a.kap_checkpoint,map_location=device,weights_only=False);kap.load_state_dict(payload["model"]);kap.to(device).eval()
+    model_class=KAPScratchModel if a.model_type=="baseline" else KAPCrossTransModel
+    kap=model_class();payload=torch.load(a.kap_checkpoint,map_location=device,weights_only=False);kap.load_state_dict(payload["model"]);kap.to(device).eval()
     arrays=[np.asarray(x,dtype=np.float32) for x in (emb,posev,courtv,shuttlev,contactv,qualityv)];ys=np.array([STROKE_CLASSES.index(r.stroke) for r in rows]);yd=np.array([SIDE_CLASSES.index(r.side) for r in rows])
     cm_s=torch.zeros(8,8,dtype=torch.int64);cm_d=torch.zeros(3,3,dtype=torch.int64);per={m:{"stroke":torch.zeros(8,8,dtype=torch.int64),"side":torch.zeros(3,3,dtype=torch.int64)} for m in TEST_MATCHES}; predictions=[]
     with torch.inference_mode():

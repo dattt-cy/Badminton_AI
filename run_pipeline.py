@@ -42,6 +42,8 @@ from ai_classifier.analytics import (  # noqa: E402
     suppress_weak_duplicate_serves,
     TacticalSequenceDecoder,
     refine_predictions_by_sequence,
+    fit_flight_time_model,
+    rescore_strokes_by_flight_time,
 )
 from ai_classifier.localization import (  # noqa: E402
     rescue_alternating_bridges,
@@ -159,14 +161,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--use-tactical-decoder",
         action="store_true",
-        default=True,
-        help="Enable statistical sequence decoding (Turn-taking Viterbi with Laplace smoothing)",
+        default=False,
+        help="Enable statistical sequence decoding (Turn-taking Viterbi with Laplace smoothing). "
+             "Off by default: it gained only ~0.3 top-1 and undoes flight-time re-scoring.",
     )
     parser.add_argument(
         "--no-tactical-decoder",
         dest="use_tactical_decoder",
         action="store_false",
         help="Disable statistical sequence decoding",
+    )
+    parser.add_argument(
+        "--no-flight-time-rescoring",
+        dest="use_flight_time_rescoring",
+        action="store_false",
+        default=True,
+        help="Disable re-scoring strokes with the flight time to the next hit",
+    )
+    parser.add_argument(
+        "--flight-time-weight",
+        type=float,
+        default=0.75,
+        help="Weight of log p(flight time | stroke) in flight-time re-scoring (default 0.75)",
     )
     parser.add_argument(
         "--tactical-lambda",
@@ -211,8 +227,10 @@ def analyze_badminton_video(
     score_ocr_interval: int = 30,
     auto_ocr: bool = True,
     use_physics_refinement: bool = False,
-    use_tactical_decoder: bool = True,
+    use_tactical_decoder: bool = False,
     tactical_lambda: float = 0.20,
+    use_flight_time_rescoring: bool = True,
+    flight_time_weight: float = 0.75,
     tau: float = 0.20,
     context_rules: bool = True,
     min_shuttle_visibility: float = 0.25,
@@ -356,6 +374,9 @@ def analyze_badminton_video(
                 "tta_windows": int(detail.get("tta_windows", 1)),
                 "crop_box": list(feature["crop_box"]),
                 "_analytics_context": feature["analytics_context"],
+                "_stroke_log_probs": torch.log_softmax(
+                    detail["logits"].reshape(-1).float(), dim=-1
+                ).tolist(),
             })
             if idx % 20 == 0 or idx == len(events):
                 print(f"  [{idx}/{len(events)}] frame={event.frame} ({detail['stroke']}, conf={detail['confidence']:.2f})")
@@ -410,6 +431,18 @@ def analyze_badminton_video(
     rally_count = max((p.get("rally", 1) for p in predictions), default=0)
     rally_time = time.time() - t0_rally
     print(f"[+] Segmented into {rally_count} rallies ({rally_time:.2f}s)")
+
+    # 4.05 Flight-time re-scoring: the classifier window ends before the opponent's
+    # return, whose timing separates push/lift and drive/push.
+    flight_changes: list[dict[str, Any]] = []
+    if use_flight_time_rescoring:
+        flight_model = fit_flight_time_model(REPO_ROOT / "data" / "manifests" / "shuttleset_rgb.csv")
+        predictions, flight_changes = rescore_strokes_by_flight_time(
+            predictions, flight_model, fps=fps, weight=flight_time_weight
+        )
+        print(f"[+] Flight-time re-scoring: adjusted {len(flight_changes)} stroke(s)")
+    for p in predictions:
+        p.pop("_stroke_log_probs", None)
 
     # 4.1 Badminton Soft Context Rules (Sport Domain Logic)
     if context_rules:
@@ -544,6 +577,7 @@ def analyze_badminton_video(
             "weak_duplicate_serves": suppressed_duplicate_serves,
             "physics_disambiguations": physics_changes,
             "tactical_sequence_refinements": sequence_changes,
+            "flight_time_refinements": flight_changes,
         },
         "spatial_distribution_3x3": tactics["spatial_distribution_3x3"],
         "player_profiles": tactics.get("player_profiles", {}),
@@ -610,6 +644,8 @@ def main() -> None:
         use_physics_refinement=args.use_physics_refinement,
         use_tactical_decoder=args.use_tactical_decoder,
         tactical_lambda=args.tactical_lambda,
+        use_flight_time_rescoring=args.use_flight_time_rescoring,
+        flight_time_weight=args.flight_time_weight,
         tau=args.tau,
         context_rules=args.context_rules,
         min_shuttle_visibility=args.min_shuttle_visibility,

@@ -161,6 +161,104 @@ def build_samples_from_manifest(
     return samples
 
 
+def build_samples_from_window_cache(root: Path, split: str, manifest_path: Path, frames: int) -> list[Sample]:
+    """Samples for the pre-extracted ``<split>/<match>_<center>_<frames>.npy`` windows.
+
+    Labels come from the manifest: a window within 2 frames of a hit is that
+    hitter's class with offset (hit - center); beyond the usual exclusion gap it
+    is no_hit; anything in between is skipped as ambiguous.
+    """
+    hits: dict[str, list[tuple[int, int]]] = {}
+    videos: dict[str, Path] = {}
+    with manifest_path.open(encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            if row.get("split") == split:
+                hits.setdefault(row["match_id"], []).append(
+                    (int(float(row["hit_frame"])), SIDE_LABEL.get(row.get("player_side", "").lower(), 0)))
+                videos.setdefault(row["match_id"], Path(row["video_path"]))
+    min_gap = frames // 2 + 4
+    samples: list[Sample] = []
+    for path in sorted((root / split).glob(f"*_{frames}.npy")):
+        match_id, center_text, _ = path.stem.split("_")
+        if match_id not in hits:
+            continue
+        center = int(center_text)
+        distance, hit, label = min((abs(center - h), h, lab) for h, lab in hits[match_id])
+        if distance <= 2:
+            samples.append(Sample(match_id, videos[match_id], center, label, float(hit - center),
+                                  f"{split}/{path.stem}"))
+        elif distance > min_gap:
+            samples.append(Sample(match_id, videos[match_id], center, 0, 0.0, f"{split}/{path.stem}"))
+    random.Random(42).shuffle(samples)
+    return samples
+
+
+def precache_windows(samples: list[Sample], root: Path, frames: int, workers: int) -> None:
+    """Write missing ``<root>/<sample_key>.npy`` windows once, so training never seeks video."""
+    missing = [s for s in samples if not (root / f"{s.sample_key}.npy").is_file()]
+    if missing:
+        for _ in DataLoader(_WindowWriter(missing, root, frames), batch_size=16, num_workers=workers):
+            pass
+
+
+class _WindowWriter(Dataset):
+    """Module-level so DataLoader workers can pickle it on Windows (spawn)."""
+
+    def __init__(self, samples: list[Sample], root: Path, frames: int) -> None:
+        self.samples, self.root = samples, root
+        self.reader = FastHitDataset(samples, frames=frames, cache_dir=None, is_train=False)
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int) -> int:
+        sample = self.samples[idx]
+        target = self.root / f"{sample.sample_key}.npy"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        np.save(target, self.reader._read_from_video(sample.video_path, sample.center_frame))
+        return idx
+
+
+def build_extra_negatives(args: argparse.Namespace, seed: int = 7) -> list[Sample]:
+    """No_hit clips from mined false positives and near-miss offsets around train hits."""
+    if args.hard_negatives is None and args.near_miss_per_hit <= 0:
+        return []
+    rng = random.Random(seed)
+    hits: dict[str, list[int]] = {}
+    videos: dict[str, Path] = {}
+    with args.manifest.open(encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            if row.get("split") == "train":
+                hits.setdefault(row["match_id"], []).append(int(float(row["hit_frame"])))
+                videos.setdefault(row["match_id"], Path(row["video_path"]))
+    min_gap = args.frames // 2 + 4  # Same exclusion as the random negatives.
+
+    def clear_of_hits(match_id: str, frame: int) -> bool:
+        return all(abs(frame - hit) > min_gap for hit in hits[match_id])
+
+    samples: list[Sample] = []
+    if args.hard_negatives is not None:
+        mined = json.loads(args.hard_negatives.read_text(encoding="utf-8"))
+        for match_id, entry in mined.items():
+            if match_id not in hits:
+                continue  # Never let a non-train match into training.
+            for fp in entry["false_positives"]:
+                centers = [fp["frame"]] + [fp["frame"] + rng.choice([-2, -1, 1, 2])
+                                           for _ in range(args.hard_neg_copies - 1)]
+                for center in centers:
+                    if clear_of_hits(match_id, center):
+                        samples.append(Sample(match_id, videos[match_id], center, 0, 0.0,
+                                              f"extra_v3/{match_id}_{center}_{args.frames}"))
+    for match_id, match_hits in hits.items():
+        for hit in match_hits:
+            for _ in range(args.near_miss_per_hit):
+                center = hit + rng.choice([-1, 1]) * rng.randint(min_gap + 1, min_gap + 8)
+                if rng.random() < args.near_miss_fraction and clear_of_hits(match_id, center):
+                    samples.append(Sample(match_id, videos[match_id], center, 0, 0.0,
+                                          f"extra_v3/{match_id}_{center}_{args.frames}"))
+    return samples
+
+
 # ---------------------------------------------------------------------------
 # Dataset with Fast Disk Caching
 # ---------------------------------------------------------------------------
@@ -198,15 +296,13 @@ class FastHitDataset(Dataset):
             ret, frame = cap.read()
             if not ret:
                 break
-            h, w = frame.shape[:2]
-            scale = 128.0 / min(h, w)
-            new_w, new_h = int(w * scale), int(h * scale)
-            resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-            y1 = max(0, (new_h - 112) // 2)
-            x1 = max(0, (new_w - 112) // 2)
-            crop = resized[y1:y1+112, x1:x1+112]
-            crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-            frames_list.append(crop_rgb)
+            # Must match scan_video_hit_rgb (inference): squash to 171x128, then
+            # take the fixed 112x112 centre crop. The cached training clips use
+            # the same transform; an aspect-preserving resize sees a narrower
+            # field of view and silently shifts the input distribution.
+            resized = cv2.resize(frame, (171, 128), interpolation=cv2.INTER_LINEAR)
+            crop = resized[8:120, 30:142]
+            frames_list.append(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
         cap.release()
 
         while len(frames_list) < self.frames:
@@ -235,16 +331,11 @@ class FastHitDataset(Dataset):
 
         tensor = torch.from_numpy(arr).permute(3, 0, 1, 2).float().div_(255.0)  # (3, T, H, W)
 
+        # A left-right flip keeps the upper (far) player at the top of the frame,
+        # so upper_hit/lower_hit labels must not be swapped.
         if self.is_train and random.random() < 0.5:
             tensor = torch.flip(tensor, dims=[-1])
-            if sample.label == 1:
-                label = 2
-            elif sample.label == 2:
-                label = 1
-            else:
-                label = sample.label
-        else:
-            label = sample.label
+        label = sample.label
 
         tensor = (tensor - self.mean) / self.std
         return tensor, label, sample.offset
@@ -357,6 +448,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--use-amp", action="store_true", default=True)
     parser.add_argument("--log-interval", type=int, default=100)
     parser.add_argument("--smoke", action="store_true", help="Quick run on 2 matches")
+    parser.add_argument(
+        "--val-split", default="val",
+        help="Manifest split for checkpoint selection; never 'test', which is reserved for reporting.",
+    )
+    parser.add_argument(
+        "--init-checkpoint", type=Path, default=None,
+        help="Start from these weights (fine-tuning) instead of random initialization.",
+    )
+    parser.add_argument(
+        "--hard-negatives", type=Path, default=None,
+        help="JSON from scripts/data/mine_hit_hard_negatives.py; each false positive becomes no_hit samples.",
+    )
+    parser.add_argument("--hard-neg-copies", type=int, default=3,
+                        help="Samples per mined false positive (the original frame plus small jitters).")
+    parser.add_argument("--near-miss-per-hit", type=int, default=0,
+                        help="Extra no_hit samples 13-20 frames from each train hit, sharpening the peak.")
+    parser.add_argument("--near-miss-fraction", type=float, default=1.0,
+                        help="Keep each near-miss candidate with this probability.")
+    parser.add_argument("--train-fraction", type=float, default=1.0,
+                        help="Random fraction of the original manifest clips kept (fine-tuning needs fewer).")
+    parser.add_argument("--val-fraction", type=float, default=1.0)
+    parser.add_argument(
+        "--window-cache", type=Path, default=None,
+        help="Root of pre-extracted windows (<split>/<match>_<center>_<frames>.npy). When set, "
+             "train/val samples come from it and extra negatives are cached under extra_v3/.",
+    )
     return parser.parse_args()
 
 
@@ -379,12 +496,31 @@ def main() -> None:
 
     # Load samples
     logger.log("[*] Parsing dataset manifests...")
-    train_samples = build_samples_from_manifest(
-        args.manifest, split="train", frames=args.frames, smoke=args.smoke
-    )
-    val_samples = build_samples_from_manifest(
-        args.manifest, split="test", frames=args.frames, smoke=args.smoke
-    )
+    if args.window_cache is not None:
+        args.cache_dir = args.window_cache
+        train_samples = build_samples_from_window_cache(args.window_cache, "train", args.manifest, args.frames)
+    else:
+        train_samples = build_samples_from_manifest(
+            args.manifest, split="train", frames=args.frames, smoke=args.smoke
+        )
+    if args.val_split == "test":
+        raise SystemExit("--val-split test would select checkpoints on the reporting split")
+    if args.window_cache is not None:
+        val_samples = build_samples_from_window_cache(args.window_cache, args.val_split, args.manifest, args.frames)
+    else:
+        val_samples = build_samples_from_manifest(
+            args.manifest, split=args.val_split, frames=args.frames, smoke=args.smoke
+        )
+    # Samples are already shuffled with a fixed seed, so a prefix is a random subset.
+    train_samples = train_samples[:int(len(train_samples) * args.train_fraction)]
+    val_samples = val_samples[:int(len(val_samples) * args.val_fraction)]
+    extra = build_extra_negatives(args)
+    if args.window_cache is not None:
+        logger.log(f"[*] Pre-caching {len(extra):,} extra windows under {args.window_cache / 'extra_v3'}...")
+        precache_windows(extra, args.window_cache, args.frames, args.workers)
+    train_samples.extend(extra)
+    random.Random(42).shuffle(train_samples)
+    logger.log(f"[+] Added {len(extra):,} mined/near-miss no_hit clips.")
     logger.log(f"[+] Loaded {len(train_samples):,} train clips and {len(val_samples):,} validation clips.")
 
     train_dataset = FastHitDataset(
@@ -417,6 +553,11 @@ def main() -> None:
         spatial_dim=160,
         temporal_dim=224,
     ).to(device)
+
+    if args.init_checkpoint is not None:
+        init = torch.load(args.init_checkpoint, map_location=device, weights_only=False)
+        model.load_state_dict(init["model"])
+        logger.log(f"[*] Initialized weights from {args.init_checkpoint}")
 
     total_params = sum(p.numel() for p in model.parameters())
     logger.log(f"[*] Model Architecture: BadmintonHitNetV2 (SE + 4-Scale MS-TCN) | Parameters: {total_params:,}")

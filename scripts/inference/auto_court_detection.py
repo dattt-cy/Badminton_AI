@@ -140,7 +140,7 @@ def detect_court_corners(video_path: str) -> np.ndarray:
     Raises ValueError if detection fails.
     """
     candidates: list[tuple[int, np.ndarray]] = []
-    for frame in _get_candidate_frames(video_path):
+    for frame in _get_candidate_frames(video_path, n_candidates=24):
         mask = _detect_court_mask(frame)
         if np.sum(mask > 0) / mask.size < 0.05:
             continue
@@ -153,10 +153,25 @@ def detect_court_corners(video_path: str) -> np.ndarray:
             candidates.append((_green_pixel_count(frame), _order_corners(corners)))
 
     if candidates:
-        return max(candidates, key=lambda item: item[0])[1]
+        return _consensus_corners(candidates)
 
     # Robust default court corners for 1280x720 broadcast video
     return np.array([[200.0, 680.0], [1080.0, 680.0], [860.0, 260.0], [420.0, 260.0]], dtype=np.float32)
+
+
+def _consensus_corners(candidates: list[tuple[int, np.ndarray]]) -> np.ndarray:
+    """Return the medoid quadrilateral of the per-frame candidates.
+
+    The main broadcast camera recurs across sampled frames, whereas replays and
+    low or close alternate angles are one-off views. Those views can contain
+    more green pixels than the main camera, so the greenest candidate is only
+    used when there are too few candidates to form a consensus.
+    """
+    if len(candidates) <= 2:
+        return max(candidates, key=lambda item: item[0])[1]
+    quads = np.stack([corners for _, corners in candidates])
+    distances = np.abs(quads[:, None] - quads[None]).sum(axis=(2, 3))
+    return quads[int(distances.sum(axis=1).argmin())]
 
 
 def _validate_corners(pts: np.ndarray, frame_shape: tuple) -> bool:
@@ -185,6 +200,13 @@ def _validate_corners(pts: np.ndarray, frame_shape: tuple) -> bool:
     bottom_width = float(np.linalg.norm(br - bl))
     top_width = float(np.linalg.norm(tr - tl))
     if top_width >= 0.80 * bottom_width:
+        return False
+    # The main broadcast camera sees a near-symmetric trapezoid with level
+    # baselines. A far player whose shirt falls in the green range pulls one
+    # top corner towards them, which breaks these properties.
+    if abs(tl[1] - tr[1]) >= 0.05 * h or abs(bl[1] - br[1]) >= 0.05 * h:
+        return False
+    if abs((tl[0] + tr[0]) / 2 - (bl[0] + br[0]) / 2) >= 0.06 * w:
         return False
     return True
 

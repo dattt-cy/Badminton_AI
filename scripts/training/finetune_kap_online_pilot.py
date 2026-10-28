@@ -13,12 +13,15 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT / "src")]
 
-from ai_classifier.models import KAPScratchModel, STROKE_CLASSES  # noqa: E402
+from ai_classifier.models import (  # noqa: E402
+    KAPCrossTransModel, KAPCrossTransV2Model, KAPScratchModel, STROKE_CLASSES,
+)
+from scripts.training.finetune_kap_online_multi_matches import OFFSETS  # noqa: E402
 from scripts.training.train_kap_scratch import confusion_metrics, load_data  # noqa: E402
 
 
@@ -43,7 +46,24 @@ def args() -> argparse.Namespace:
         default="balanced_accuracy",
         help="Validation metric used to select the checkpoint.",
     )
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument(
+        "--class-balance", choices=("none", "weights", "sampler"), default="none",
+        help="Counter online class imbalance with loss weights or a balanced sampler.",
+    )
+    parser.add_argument(
+        "--class-weight-power", type=float, default=0.5,
+        help="Loss weight = (N / (K * count)) ** power; 0.5 is square-root inverse frequency.",
+    )
     return parser.parse_args()
+
+
+MODEL_CLASSES = {
+    "baseline": KAPScratchModel,
+    "cross": KAPCrossTransModel,
+    "cross_v2": KAPCrossTransV2Model,
+    "cross_v3": KAPCrossTransV2Model,
+}
 
 
 def stack(records: list[dict]) -> list[torch.Tensor]:
@@ -81,8 +101,11 @@ def evaluate(model: nn.Module, inputs: list[torch.Tensor], targets: torch.Tensor
 
 def main() -> None:
     cfg = args(); random.seed(cfg.seed); np.random.seed(cfg.seed); torch.manual_seed(cfg.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    offsets = {"13": 16300, "14": 89539, "15": 42240, "16": 13792, "17": 68475}
+    if cfg.device == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device(cfg.device)
+    offsets = OFFSETS
     online_records, target_parts = [], []
     per_match = {}
     for path in cfg.train_online:
@@ -103,13 +126,29 @@ def main() -> None:
         ("rgb", "pose", "court", "shuttle", "contact_dist", "quality", "stroke")])
     online = TensorDataset(*online_inputs, online_targets)
     replay_loader = DataLoader(replay, batch_size=64, shuffle=True, generator=generator)
-    online_loader = DataLoader(online, batch_size=32, shuffle=True, generator=generator)
+    counts = torch.bincount(online_targets, minlength=len(STROKE_CLASSES)).float().clamp_min(1)
+    if cfg.class_balance == "sampler":
+        sampler = WeightedRandomSampler(
+            (1.0 / counts)[online_targets], num_samples=len(online), replacement=True,
+            generator=generator,
+        )
+        online_loader = DataLoader(online, batch_size=32, sampler=sampler)
+    else:
+        online_loader = DataLoader(online, batch_size=32, shuffle=True, generator=generator)
 
     payload = torch.load(cfg.base, map_location=device, weights_only=False)
-    model = KAPScratchModel().to(device); model.load_state_dict(payload["model"])
+    model_type = payload.get("model_type", "baseline")
+    model = MODEL_CLASSES[model_type]().to(device); model.load_state_dict(payload["model"])
     baseline = evaluate(model, validation_inputs, validation_targets, device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.learning_rate, weight_decay=1e-4)
     criterion = nn.CrossEntropyLoss(label_smoothing=0.03)
+    online_criterion = criterion
+    if cfg.class_balance == "weights":
+        # Weighting applies to online samples only; clean replay keeps its own prior.
+        weights = (len(online_targets) / (len(counts) * counts)) ** cfg.class_weight_power
+        online_criterion = nn.CrossEntropyLoss(
+            weight=(weights / weights.mean()).to(device), label_smoothing=0.03,
+        )
     best_score = baseline[cfg.selection_metric]
     best_metrics = baseline
     history = []
@@ -129,7 +168,7 @@ def main() -> None:
                 optimizer.zero_grad(set_to_none=True)
                 online_x = [value.to(device) for value in batch[:6]]
                 clean_x = [value.to(device) for value in clean_batch[:6]]
-                online_loss = criterion(model(*online_x)[0], batch[6].to(device))
+                online_loss = online_criterion(model(*online_x)[0], batch[6].to(device))
                 clean_loss = criterion(model(*clean_x)[0], clean_batch[6].to(device))
                 loss = online_loss + 0.5 * clean_loss
                 loss.backward(); nn.utils.clip_grad_norm_(model.parameters(), 1.0); optimizer.step()
@@ -140,11 +179,13 @@ def main() -> None:
         if metrics[cfg.selection_metric] > best_score:
             best_score = metrics[cfg.selection_metric]
             best_metrics = metrics
-            torch.save({"model": model.state_dict(), "epoch": epoch,
+            torch.save({"model": model.state_dict(), "epoch": epoch, "model_type": model_type,
                         "base_checkpoint": str(cfg.base), "online_train_matches": sorted(per_match),
                         "online_validation_match": "41", "val_metrics": metrics,
                         "selection_metric": cfg.selection_metric,
-                        "selection_score": best_score},
+                        "selection_score": best_score,
+                        "class_balance": cfg.class_balance,
+                        "class_weight_power": cfg.class_weight_power},
                        cfg.output_dir / "best.pth")
     result = {"protocol": "online_train_matches13_17_validate_match41", "offsets": offsets,
               "per_match": per_match,

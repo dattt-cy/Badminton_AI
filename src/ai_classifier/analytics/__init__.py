@@ -6,6 +6,7 @@ from .stroke import (
     suppress_weak_duplicate_serves,
 )
 from .tactical_decoder import TacticalSequenceDecoder, refine_predictions_by_sequence
+from .flight_time import fit_flight_time_model, rescore_strokes_by_flight_time
 from .match_analysis import (
     analyze_scoreboard,
     build_match_analysis,
@@ -24,6 +25,8 @@ __all__ = [
     "suppress_weak_duplicate_serves",
     "TacticalSequenceDecoder",
     "refine_predictions_by_sequence",
+    "fit_flight_time_model",
+    "rescore_strokes_by_flight_time",
     "build_tactical_analytics",
     "build_match_analysis",
     "analyze_scoreboard",
