@@ -98,8 +98,14 @@ def analyze_scoreboard(
     total_frames: int | None = None,
     edge_window_seconds: float = 5.0,
     scoreboard_ocr: dict[str, Any] | None = None,
+    game_break_seconds: float = 100.0,
 ) -> dict[str, Any]:
-    """Estimate rally outcomes and align scores with OCR scoreboard evidence & Badminton server rules."""
+    """Estimate rally outcomes and align scores with OCR scoreboard evidence & Badminton server rules.
+
+    Without OCR, a pause of at least ``game_break_seconds`` between rallies
+    starts a new game: in ShuttleSet every between-game break lasts 105 s or
+    more, while fewer than 0.2% of within-game pauses exceed 100 s.
+    """
     names = player_names or {"upper": "Upper Player", "lower": "Lower Player"}
     rallies_dict: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for p in predictions:
@@ -117,6 +123,18 @@ def analyze_scoreboard(
 
     used_ocr_idx: set[int] = set()
     rally_summaries: list[dict[str, Any]] = []
+    games: list[dict[str, Any]] = []
+    game_number = 1
+    previous_end_sec: float | None = None
+
+    def close_game() -> None:
+        games.append({
+            "game_number": game_number,
+            "score_upper": curr_score[0],
+            "score_lower": curr_score[1],
+            "score_text": f"{curr_score[0]} - {curr_score[1]}",
+            "rallies": sum(1 for r in rally_summaries if r["game_number"] == game_number),
+        })
 
     for i, r_id in enumerate(rally_keys):
         hits = rallies_dict[r_id]
@@ -125,6 +143,16 @@ def analyze_scoreboard(
         dur_seconds = round((end_frame - start_frame) / fps, 2) if end_frame >= start_frame else 0.0
         start_sec = round(start_frame / fps, 2)
         end_sec = round(end_frame / fps, 2)
+
+        if (
+            not ocr_events
+            and previous_end_sec is not None
+            and start_sec - previous_end_sec >= game_break_seconds
+        ):
+            close_game()
+            game_number += 1
+            curr_score = [0, 0]
+        previous_end_sec = end_sec
 
         next_start_sec = (
             round(int(rallies_dict[rally_keys[i + 1]][0].get("refined_frame", rallies_dict[rally_keys[i + 1]][0].get("frame", 0))) / fps, 2)
@@ -199,6 +227,7 @@ def analyze_scoreboard(
         server = infer_rally_server(hits)
         rally_summaries.append({
             "rally_id": r_id,
+            "game_number": game_number,
             "start_time_seconds": start_sec,
             "end_time_seconds": end_sec,
             "duration_seconds": dur_seconds,
@@ -219,7 +248,11 @@ def analyze_scoreboard(
             "stroke_sequence": [h.get("stroke", "unknown") for h in hits],
         })
 
+    if rally_summaries:
+        close_game()
+
     return {
+        "games": games,
         "estimated_score": {
             "upper": curr_score[0],
             "lower": curr_score[1],
@@ -228,6 +261,8 @@ def analyze_scoreboard(
             "is_estimate": not bool(ocr_events),
             "method": "calibrated_ocr_with_server_rule" if ocr_events else "badminton_server_rule_and_heuristics",
             "complete_rallies_counted": sum(r["included_in_estimated_score"] for r in rally_summaries),
+            "game_number": game_number,
+            "scope": "current_game",
         },
         "rallies": rally_summaries,
     }
@@ -600,38 +635,32 @@ def generate_coach_insights(
     insights.append({
         "category": "Match Dynamic",
         "target": "General",
-        "insight": f"Estimated rally outcome for this segment is {score_txt}, favoring {leader_name}; this is not an official score. "
+        "insight": f"Estimated score of the current game (game {final_score.get('game_number', 1)} in this video) is {score_txt}, "
+                   f"favoring {leader_name}; this is not an official score. "
                    f"{up_name} is styled as '{up_prof.get('playstyle', {}).get('label', 'All-Rounder')}', "
                    f"while {low_name} operates as '{low_prof.get('playstyle', {}).get('label', 'All-Rounder')}'.",
     })
 
-    # 2. Upper player tactical advice
-    up_vuln = up_prof.get("error_analysis", {}).get("most_vulnerable_zone")
-    up_vuln_str = f"in {up_vuln.get('name')}" if up_vuln else "on deep defensive returns"
-    up_atk = up_prof.get("radar_attributes", {}).get("attack", 50)
-    if up_atk >= 70:
-        up_tip = f"{up_name}'s attack rating is strong ({up_atk}/100). Keep applying downward pressure, but protect coverage {up_vuln_str} to minimize counter-attacks."
-    else:
-        up_tip = f"In this segment, {up_name}'s observed stroke mix was less attack-oriented; review the video before drawing a coaching conclusion. The most frequent end position among estimated losses was {up_vuln_str}."
-    insights.append({
-        "category": "Player Strategy",
-        "target": up_name,
-        "insight": up_tip,
-    })
-
-    # 3. Lower player tactical advice
-    low_vuln = low_prof.get("error_analysis", {}).get("most_vulnerable_zone")
-    low_vuln_str = f"in {low_vuln.get('name')}" if low_vuln else "on net exchanges"
-    low_net = low_prof.get("radar_attributes", {}).get("net_control", 50)
-    if low_net >= 70:
-        low_tip = f"In this segment, {low_name}'s net-stroke share index was {low_net}/100. This describes detected stroke usage, not net ability; the most frequent end position among estimated losses was {low_vuln_str}."
-    else:
-        low_tip = f"{low_name} should reinforce defense and tighten court transitions {low_vuln_str}."
-    insights.append({
-        "category": "Player Strategy",
-        "target": low_name,
-        "insight": low_tip,
-    })
+    # 2-3. The same observational summary for both players.
+    for name, prof in ((up_name, up_prof), (low_name, low_prof)):
+        attrs = prof.get("radar_attributes", {})
+        vuln = prof.get("error_analysis", {}).get("most_vulnerable_zone")
+        style = prof.get("playstyle", {}).get("label", "Mixed").replace(" segment", "").lower()
+        tip = (
+            f"In this segment, {name}'s detected stroke mix was {style} "
+            f"(attack {attrs.get('attack', 0)}/100, net {attrs.get('net_control', 0)}/100, "
+            f"defence {attrs.get('defense', 0)}/100; shares of detected strokes, not ability)."
+        )
+        if vuln:
+            tip += (
+                f" Their own last hit in estimated lost rallies came most often from "
+                f"{vuln.get('name')} ({vuln.get('losses_incurred')} rallies)."
+            )
+        insights.append({
+            "category": "Player Strategy",
+            "target": name,
+            "insight": tip,
+        })
 
     # 4. Key Counter-Tactics from Response Matrix
     up_responses = response_matrix.get("upper", {})
