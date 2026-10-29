@@ -41,6 +41,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kap-checkpoint", type=Path, default=CKPTS / "kap_classifier.pth")
     parser.add_argument("--hit-checkpoint", type=Path, default=CKPTS / "hit_detector.pth")
     parser.add_argument("--clips", type=str, default=None, help="Comma-separated clip numbers, e.g. 3,1,2.")
+    parser.add_argument("--min-shuttle-visibility", type=float, default=0.25,
+                        help="Pipeline default; 0 keeps every candidate so thresholds can be swept offline.")
     parser.add_argument("--manifest", type=Path, default=Path("data/manifests/shuttleset_rgb.csv"))
     parser.add_argument("--tolerance", type=int, default=12)
     parser.add_argument("--output-dir", type=Path, default=Path("work_dirs/worker_pipeline_8clips"))
@@ -79,7 +81,7 @@ def main() -> None:
                 player_upper=cfg["player_upper"], player_lower=cfg["player_lower"],
                 hit_checkpoint=args.hit_checkpoint, kap_checkpoint=args.kap_checkpoint,
                 pose_model=CKPTS / "yolov8n-pose.pt", rally_model=CKPTS / "rally_boundary_detector.joblib",
-                **WORKER_SETTINGS,
+                min_shuttle_visibility=args.min_shuttle_visibility, **WORKER_SETTINGS,
             )
             print(f"    done in {time.time() - started:.0f}s", flush=True)
         payload = json.loads(output.read_text(encoding="utf-8"))

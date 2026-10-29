@@ -264,6 +264,19 @@ def test_prune_trailing_phantom_hits_removes_dead_shuttle_echo():
     assert cleaned[-1]["stroke"] == "smash"
 
 
+def test_prune_trailing_phantom_hits_keeps_confident_net_kill():
+    from ai_classifier.analytics import prune_trailing_phantom_hits
+
+    predictions = [
+        {"frame": 100, "stroke": "serve", "hitter": "lower", "rally": 1, "hit_score": 0.9},
+        {"frame": 130, "stroke": "net_shot", "hitter": "upper", "rally": 1, "hit_score": 0.9},
+        {"frame": 150, "stroke": "net_attack", "hitter": "lower", "rally": 1, "hit_score": 0.92},
+    ]
+    assert len(prune_trailing_phantom_hits(predictions, fps=30.0)) == 3
+    predictions[-1]["hit_score"] = 0.80
+    assert len(prune_trailing_phantom_hits(predictions, fps=30.0)) == 2
+
+
 def test_resolve_rally_winner_recognizes_decisive_drop():
     from ai_classifier.analytics.match_analysis import resolve_rally_winner
 
