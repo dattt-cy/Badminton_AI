@@ -389,8 +389,16 @@ def prune_trailing_phantom_hits(
     *,
     fps: float = 30.0,
     max_terminal_gap_seconds: float = 0.75,
+    always_prune_gap_seconds: float = 0.40,
+    min_keep_hit_score: float = 0.85,
 ) -> list[dict[str, Any]]:
-    """Prune false-positive trailing swings at rally end (e.g. failing to retrieve a dead shuttle)."""
+    """Prune false-positive trailing swings at rally end (e.g. failing to retrieve a dead shuttle).
+
+    A trailing net shot is often a genuine rally-ending net kill, so beyond
+    ``always_prune_gap_seconds`` it is kept when the hit detector is confident.
+    On the 8-clip benchmark about half of the unconditionally pruned hits were
+    real; this rule kept 8 real / 4 phantom hits on the validation clips.
+    """
     if not predictions:
         return predictions
 
@@ -413,6 +421,10 @@ def prune_trailing_phantom_hits(
                 and penult.get("stroke") in ("net_shot", "drop", "smash", "net_attack")
                 and last.get("hitter") != penult.get("hitter")
                 and gap_sec <= max_terminal_gap_seconds
+                and (
+                    gap_sec <= always_prune_gap_seconds
+                    or float(last.get("hit_score", 0.0)) < min_keep_hit_score
+                )
             )
             if is_trailing_echo:
                 hits = hits[:-1]
