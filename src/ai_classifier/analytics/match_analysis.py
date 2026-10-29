@@ -27,6 +27,41 @@ def opponent_of(hitter: str) -> str:
     return "lower" if hitter == "upper" else "upper"
 
 
+def infer_rally_server(hits: list[dict[str, Any]]) -> str:
+    """Return the serving side of a rally.
+
+    When the serve itself was not detected, the first detected hit is the
+    receiver's return, so the server is that hitter's opponent.
+    """
+    if not hits:
+        return "unknown"
+    first_hitter = hits[0].get("hitter", "unknown")
+    if hits[0].get("stroke") == "serve" or first_hitter not in ("upper", "lower"):
+        return first_hitter
+    return opponent_of(first_hitter)
+
+
+def player_centric_zone(hitter: str, analytics: dict[str, Any] | None) -> int | None:
+    """Map a player's court position to a 3x3 zone of their own half.
+
+    Rows run Front (net) -> Back (baseline) inside the hitter's half, and
+    columns are left/right from the hitter's own viewpoint, so the upper
+    player's grid is rotated 180 degrees relative to the image.
+    """
+    position = (analytics or {}).get("player_position_court")
+    if not position or len(position) != 2 or hitter not in ("upper", "lower"):
+        return None
+    x, y = float(position[0]), float(position[1])
+    if not (-0.05 <= x <= 1.05 and -0.05 <= y <= 1.05):
+        return None
+    depth = (0.5 - y) / 0.5 if hitter == "upper" else (y - 0.5) / 0.5
+    row = min(max(int(depth * 3), 0), 2)
+    column = min(max(int(x * 3), 0), 2)
+    if hitter == "upper":
+        column = 2 - column
+    return row * 3 + column + 1
+
+
 def resolve_rally_winner(hits: list[dict[str, Any]]) -> tuple[str, str]:
     """Infer the rally winner and end reason based on final stroke dynamics.
 
@@ -142,8 +177,7 @@ def analyze_scoreboard(
                 # 2. Badminton Next-Rally Server Rule: The winner of rally k serves in rally k+1
                 next_server = None
                 if i + 1 < len(rally_keys):
-                    next_hits = rallies_dict[rally_keys[i + 1]]
-                    next_server = next_hits[0].get("hitter")
+                    next_server = infer_rally_server(rallies_dict[rally_keys[i + 1]])
 
                 if next_server in ("upper", "lower"):
                     winner = next_server
@@ -162,7 +196,7 @@ def analyze_scoreboard(
                         curr_score[1] += 1
                 is_estimated = True
 
-        server = hits[0].get("hitter", "unknown")
+        server = infer_rally_server(hits)
         rally_summaries.append({
             "rally_id": r_id,
             "start_time_seconds": start_sec,
@@ -278,26 +312,13 @@ def analyze_spatial_court_grid(
 
     for p in predictions:
         hitter = p.get("hitter", "upper")
-        # Try getting analytics area or calculate from proxy
-        area = None
         analytics = p.get("analytics")
-        if analytics and isinstance(analytics, dict):
-            area = analytics.get("hitting_area_3x3") or analytics.get("landing_area_3x3_proxy")
-        
+        area = player_centric_zone(hitter, analytics if isinstance(analytics, dict) else None)
         if area is None:
-            missing_positions[hitter] += 1
+            if hitter in missing_positions:
+                missing_positions[hitter] += 1
             continue
-
-        # Court coordinates are global (top-to-bottom). Rotate the upper
-        # player's grid so Front/Mid/Back have the same player-centric meaning
-        # for both athletes.
-        if area is not None and hitter == "upper":
-            zero_based = int(area) - 1
-            row, column = divmod(zero_based, 3)
-            area = (2 - row) * 3 + column + 1
-
-        if area and 1 <= int(area) <= 9:
-            zone_counts[hitter][int(area)] += 1
+        zone_counts[hitter][area] += 1
 
     result: dict[str, Any] = {}
     for player in ["upper", "lower"]:
@@ -433,13 +454,13 @@ def analyze_player_profiles(
         for r in lost_rallies:
             r_hits = [p for p in predictions if int(p.get("rally", 1)) == r.get("rally_id")]
             if r_hits:
-                last_hit = r_hits[-1]
-                area = None
-                analytics = last_hit.get("analytics")
-                if analytics and isinstance(analytics, dict):
-                    area = analytics.get("hitting_area_3x3")
-                if area and 1 <= int(area) <= 9:
-                    vulnerable_zones[int(area)] += 1
+                # Zone of the losing player's own final hit, when they made it.
+                side_hits = [p for p in r_hits if p.get("hitter") == side]
+                if side_hits:
+                    analytics = side_hits[-1].get("analytics")
+                    area = player_centric_zone(side, analytics if isinstance(analytics, dict) else None)
+                    if area is not None:
+                        vulnerable_zones[area] += 1
 
         top_zone = vulnerable_zones.most_common(1)
         vuln_zone_info = None

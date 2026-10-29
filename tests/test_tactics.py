@@ -70,13 +70,32 @@ def test_spatial_grid_rotates_upper_side_to_player_perspective():
     from ai_classifier.analytics.match_analysis import analyze_spatial_court_grid
 
     predictions = [
-        {"hitter": "upper", "analytics": {"hitting_area_3x3": 2}},
-        {"hitter": "lower", "analytics": {"hitting_area_3x3": 8}},
+        # Upper player on their own baseline, image-left = their right.
+        {"hitter": "upper", "analytics": {"player_position_court": [0.1, 0.05]}},
+        # Lower player close to the net, centre.
+        {"hitter": "lower", "analytics": {"player_position_court": [0.5, 0.55]}},
     ]
     result = analyze_spatial_court_grid(predictions)
-    assert result["upper"][7]["name"] == "Back-Center"
-    assert result["upper"][7]["count"] == 1
-    assert result["lower"][7]["count"] == 1
+    assert result["upper"][8]["name"] == "Back-Right"
+    assert result["upper"][8]["count"] == 1
+    assert result["lower"][1]["name"] == "Front-Center"
+    assert result["lower"][1]["count"] == 1
+
+
+def test_scoreboard_infers_server_when_serve_was_missed():
+    predictions = [
+        {"refined_frame": 10, "stroke": "serve", "hitter": "lower", "rally": 1, "confidence": 0.99},
+        {"refined_frame": 35, "stroke": "lift", "hitter": "upper", "rally": 1, "confidence": 0.90},
+        {"refined_frame": 60, "stroke": "smash", "hitter": "lower", "rally": 1, "confidence": 0.95},
+        # Rally 2's serve (by upper) was not detected; the first hit is lower's return.
+        {"refined_frame": 600, "stroke": "net_attack", "hitter": "lower", "rally": 2, "confidence": 0.9},
+        {"refined_frame": 625, "stroke": "lift", "hitter": "upper", "rally": 2, "confidence": 0.9},
+        {"refined_frame": 650, "stroke": "smash", "hitter": "lower", "rally": 2, "confidence": 0.9},
+    ]
+    rallies = analyze_scoreboard(predictions)["rallies"]
+    assert rallies[1]["server"] == "upper"
+    # Upper serves rally 2, so upper won rally 1 despite lower's final smash.
+    assert rallies[0]["winner"] == "upper"
 
 
 def test_build_tactical_analytics_full_pipeline():
