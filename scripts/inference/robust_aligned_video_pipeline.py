@@ -109,10 +109,14 @@ class AlignedVideoPipeline:
         orig_h: int = 720,
         pose_model_path: str | Path = "models/checkpoints/pose/yolov8x-pose.pt",
         tau: float = 0.0,
+        rgb_before: int = 30,
     ):
         self.orig_w = orig_w
         self.orig_h = orig_h
         self.tau = float(tau)
+        # The visual backbone was trained on 16 frames spanning hit-30..hit+30;
+        # pose and shuttle keep the shorter before/after window of extract_features.
+        self.rgb_before = int(rgb_before)
         corners = corners if corners is not None else COURT_CORNERS_PROFILE["default"]
         self.h_mat = cv2.getPerspectiveTransform(corners, DST_PTS)
 
@@ -317,6 +321,7 @@ class AlignedVideoPipeline:
 
         if len(frames_bgr) < 20:
             return None
+        decoded = dict(zip(frame_indices, frames_bgr))
 
         if all(frame in self._shuttle_cache for frame in frame_indices):
             coord_map = {frame: self._shuttle_cache[frame] for frame in frame_indices}
@@ -435,20 +440,7 @@ class AlignedVideoPipeline:
                 max(0, cx - side // 2), max(0, cy - side // 2),
                 min(self.orig_w, cx + side // 2), min(self.orig_h, cy + side // 2),
             )
-        sampled = np.rint(np.linspace(0, len(frames_bgr) - 1, 16)).astype(np.int64)
-        x1, y1, x2, y2 = crop_box
-        rgb_16 = [
-            cv2.cvtColor(frames_bgr[int(index)][y1:y2, x1:x2], cv2.COLOR_BGR2RGB)
-            for index in sampled
-        ]
-
-        t_rgb = torch.from_numpy(np.stack(rgb_16[:16])).permute(0, 3, 1, 2).float().div_(255.0)
-        t_rgb = VF.resize(t_rgb, [112, 112], antialias=False).to(DEVICE)
-        t_rgb = (t_rgb - _MEAN) / _STD
-        hitter_clip = t_rgb.permute(1, 0, 2, 3).unsqueeze(0)
-
-        with torch.inference_mode():
-            emb = self.rgb_model.extract_features(hitter_clip)
+        emb = self.rgb_embedding(cap, refined_hit_frame, crop_box, total_frames, after, decoded)
 
         return {
             "hit_frame": refined_hit_frame,
@@ -471,6 +463,43 @@ class AlignedVideoPipeline:
                 "hitter_wrists": selected_wrists,
             },
         }
+
+    def rgb_embedding(
+        self, cap: cv2.VideoCapture, hit_frame: int, crop_box, total_frames: int,
+        after: int = 30, decoded: dict[int, np.ndarray] | None = None,
+    ) -> torch.Tensor:
+        """R(2+1)D embedding of 16 hitter crops spanning hit-rgb_before..hit+after.
+
+        ``decoded`` holds frames already read for this event; only the missing
+        (earlier) frames are decoded again.
+        """
+        decoded = dict(decoded or {})
+        first = max(0, hit_frame - self.rgb_before)
+        last = min(total_frames - 1, hit_frame + after)
+        wanted = [int(f) for f in np.rint(np.linspace(first, last, 16)).astype(np.int64)]
+        missing = [f for f in wanted if f not in decoded]
+        if missing:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, missing[0])
+            for f in range(missing[0], missing[-1] + 1):
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                decoded[f] = frame
+        available = sorted(decoded)
+        x1, y1, x2, y2 = crop_box
+        rgb_16 = [
+            cv2.cvtColor(
+                decoded[f if f in decoded else min(available, key=lambda a: abs(a - f))][y1:y2, x1:x2],
+                cv2.COLOR_BGR2RGB,
+            )
+            for f in wanted
+        ]
+        t_rgb = torch.from_numpy(np.stack(rgb_16)).permute(0, 3, 1, 2).float().div_(255.0)
+        t_rgb = VF.resize(t_rgb, [112, 112], antialias=False).to(DEVICE)
+        t_rgb = (t_rgb - _MEAN) / _STD
+        hitter_clip = t_rgb.permute(1, 0, 2, 3).unsqueeze(0)
+        with torch.inference_mode():
+            return self.rgb_model.extract_features(hitter_clip)
 
     def predict_detailed(
         self, feat: dict, classifier: KAPScratchModel | None = None, tau: float | None = None
