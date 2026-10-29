@@ -140,6 +140,38 @@ def test_build_tactical_analytics_full_pipeline():
         assert "insight" in ins
 
 
+def test_scoreboard_resets_score_after_game_break():
+    predictions = []
+    # Two rallies in game 1, then a 2-minute break, then one rally in game 2.
+    for rally, start in ((1, 0), (2, 900), (3, 900 + 120 * 30)):
+        predictions += [
+            {"refined_frame": start, "stroke": "serve", "hitter": "lower", "rally": rally, "confidence": 0.9},
+            {"refined_frame": start + 25, "stroke": "lift", "hitter": "upper", "rally": rally, "confidence": 0.9},
+            {"refined_frame": start + 50, "stroke": "smash", "hitter": "lower", "rally": rally, "confidence": 0.9},
+        ]
+    scoreboard = analyze_scoreboard(predictions)
+    assert [r["game_number"] for r in scoreboard["rallies"]] == [1, 1, 2]
+    assert [g["score_text"] for g in scoreboard["games"]] == ["0 - 2", "0 - 1"]
+    assert scoreboard["estimated_score"]["text"] == "0 - 1"
+    assert scoreboard["estimated_score"]["game_number"] == 2
+
+
+def test_coach_insights_describe_both_players_the_same_way():
+    from ai_classifier.analytics.match_analysis import generate_coach_insights
+
+    profile = {
+        "radar_attributes": {"attack": 80, "net_control": 40, "defense": 30},
+        "playstyle": {"label": "Attack-oriented segment"},
+        "error_analysis": {"most_vulnerable_zone": None},
+    }
+    profiles = {"profiles": {"upper": dict(profile), "lower": dict(profile)}}
+    scoreboard = {"estimated_score": {"text": "0 - 0", "leader": "draw"}}
+    rows = [r for r in generate_coach_insights(profiles, {}, scoreboard, {"upper": "A", "lower": "B"})
+            if r["category"] == "Player Strategy"]
+    assert len(rows) == 2
+    assert rows[0]["insight"].replace("A's", "X's") == rows[1]["insight"].replace("B's", "X's")
+
+
 def test_coach_insight_suppresses_tiny_response_samples():
     from ai_classifier.analytics.match_analysis import generate_coach_insights
 
