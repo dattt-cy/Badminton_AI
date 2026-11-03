@@ -98,6 +98,32 @@ def test_scoreboard_infers_server_when_serve_was_missed():
     assert rallies[0]["winner"] == "upper"
 
 
+def test_scoreboard_maps_ocr_first_row_to_lower_player():
+    predictions = []
+    # The lower player wins rallies 1-2 (serves 2-3), the upper player wins rally 3 (serves 4).
+    for rally, server in enumerate(("lower", "lower", "lower", "upper"), start=1):
+        base = rally * 900
+        receiver = "upper" if server == "lower" else "lower"
+        predictions += [
+            {"refined_frame": base, "stroke": "serve", "hitter": server, "rally": rally},
+            {"refined_frame": base + 30, "stroke": "lift", "hitter": receiver, "rally": rally},
+            {"refined_frame": base + 60, "stroke": "smash", "hitter": server, "rally": rally},
+        ]
+    # Scoreboard rows are (lower player, upper player), starting at 3-5.
+    ocr = {
+        "initial_score": [3, 5],
+        "events": [
+            {"time_seconds": 33.0, "previous_score": [3, 5], "score": [4, 5], "point_winner": "first"},
+            {"time_seconds": 63.0, "previous_score": [4, 5], "score": [5, 5], "point_winner": "first"},
+            {"time_seconds": 93.0, "previous_score": [5, 5], "score": [5, 6], "point_winner": "second"},
+        ],
+    }
+    result = analyze_scoreboard(predictions, scoreboard_ocr=ocr)
+    assert result["estimated_score"]["ocr_first_row_side"] == "lower"
+    assert [r["winner"] for r in result["rallies"][:3]] == ["lower", "lower", "upper"]
+    assert result["rallies"][2]["score_text"] == "6 - 5"
+
+
 def test_build_tactical_analytics_full_pipeline():
     predictions = [
         {"refined_frame": 10, "stroke": "serve", "hitter": "lower", "rally": 1, "ball_round": 1, "confidence": 0.95},
@@ -235,6 +261,21 @@ def test_coachai_plus_detects_pressure_and_counterattack():
     assert upper["primary_tactic"] == "defensive_counterattack"
 
 
+def test_coachai_plus_keeps_lone_counterattack_ending_mid_rally():
+    predictions = [
+        {"rally": 1, "ball_round": 1, "hitter": "lower", "stroke": "smash", "analytics": {}},
+        {"rally": 1, "ball_round": 2, "hitter": "upper", "stroke": "drop", "analytics": {}},
+        {"rally": 1, "ball_round": 3, "hitter": "lower", "stroke": "lift", "analytics": {}},
+        {"rally": 1, "ball_round": 4, "hitter": "upper", "stroke": "clear", "analytics": {}},
+        {"rally": 1, "ball_round": 5, "hitter": "lower", "stroke": "clear", "analytics": {}},
+        {"rally": 1, "ball_round": 6, "hitter": "upper", "stroke": "lift", "analytics": {}},
+    ]
+    result = analyze_coachai_plus_tactics(predictions)
+    upper = next(row for row in result["rallies"] if row["player"] == "upper")
+    assert {row["type"] for row in upper["detected_tactics"]} == {"defensive_counterattack"}
+    assert upper["primary_tactic"] == "defensive_counterattack"
+
+
 def test_coachai_plus_marks_spatial_tactics_as_proxy_based():
     predictions = []
     for ball_round, point in enumerate(
@@ -339,3 +380,69 @@ def test_resolve_rally_winner_recognizes_decisive_drop():
     assert winner == "upper"
     assert reason == "winner_drop"
 
+
+
+def test_attach_tactic_outcomes_reports_win_rate_and_rally_length():
+    from ai_classifier.analytics.tactics import attach_tactic_outcomes
+
+    predictions = []
+    # Rally 1: upper presses (smash, smash) and wins; rally 2: upper presses and loses.
+    for rally in (1, 2):
+        base = rally * 10.0
+        predictions += [
+            {"rally": rally, "ball_round": 1, "hitter": "lower", "stroke": "serve", "time_seconds": base},
+            {"rally": rally, "ball_round": 2, "hitter": "upper", "stroke": "smash", "time_seconds": base + 1},
+            {"rally": rally, "ball_round": 3, "hitter": "lower", "stroke": "lift", "time_seconds": base + 2},
+            {"rally": rally, "ball_round": 4, "hitter": "upper", "stroke": "smash", "time_seconds": base + 3},
+        ]
+    scoreboard = {
+        "rallies": [
+            {"rally_id": 1, "winner": "upper", "included_in_estimated_score": True},
+            {"rally_id": 2, "winner": "lower", "included_in_estimated_score": True},
+        ]
+    }
+    result = attach_tactic_outcomes(analyze_coachai_plus_tactics(predictions), scoreboard)
+
+    pressure = result["effectiveness_by_player"]["upper"]["full_court_pressure"]
+    assert pressure["uses"] == 2
+    assert pressure["wins"] == 1
+    assert pressure["win_rate"] == 0.5
+    assert pressure["avg_rally_length"] == 4
+
+    upper_rally_1 = next(
+        row for row in result["rallies"] if row["player"] == "upper" and row["rally_id"] == 1
+    )
+    assert upper_rally_1["won"] is True
+    interval = upper_rally_1["detected_tactics"][0]["intervals"][0]
+    assert (interval["start_time_seconds"], interval["end_time_seconds"]) == (11.0, 13.0)
+
+
+def test_attach_tactic_outcomes_ignores_uncounted_rallies():
+    from ai_classifier.analytics.tactics import attach_tactic_outcomes
+
+    predictions = [
+        {"rally": 1, "ball_round": 1, "hitter": "upper", "stroke": "smash"},
+        {"rally": 1, "ball_round": 2, "hitter": "lower", "stroke": "lift"},
+    ]
+    scoreboard = {"rallies": [{"rally_id": 1, "winner": "upper", "included_in_estimated_score": False}]}
+    result = attach_tactic_outcomes(analyze_coachai_plus_tactics(predictions), scoreboard)
+    stats = result["effectiveness_by_player"]["upper"]["no_tactic"]
+    assert stats["decided_rallies"] == 0
+    assert stats["win_rate"] is None
+
+
+def test_coachai_plus_reports_dominant_four_corner_subtactic():
+    predictions = [
+        {
+            "rally": 1,
+            "ball_round": index,
+            "hitter": "upper",
+            "stroke": "clear",
+            "analytics": {"landing_position_court_proxy": point},
+        }
+        # All four shots land deep: back-court lock covers the whole window.
+        for index, point in enumerate(([0.2, 0.95], [0.8, 0.95], [0.3, 0.9], [0.7, 0.9]), start=1)
+    ]
+    upper = analyze_coachai_plus_tactics(predictions)["rallies"][0]
+    assert upper["primary_tactic"] == "four_corner"
+    assert upper["four_corner_subtactic"] == "back_court_lock"

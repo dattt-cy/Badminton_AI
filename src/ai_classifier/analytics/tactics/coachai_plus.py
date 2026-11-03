@@ -74,6 +74,54 @@ def _target_zone(hit: dict[str, Any]) -> str | None:
     return f"{depth}_{side}"
 
 
+FOUR_CORNER_SUBTACTICS = (
+    "left_side_lock", "right_side_lock",
+    "front_court_lock", "back_court_lock",
+    "four_corner_clear_drop",
+)
+
+
+def _time_seconds(hit: dict[str, Any]) -> float | None:
+    value = hit.get("time_seconds")
+    return round(float(value), 3) if value is not None else None
+
+
+def _interval_ranges(
+    hits: list[dict[str, Any]], intervals: list[tuple[int, int]]
+) -> list[dict[str, Any]]:
+    """Describe index intervals over ``hits`` as ball rounds and video times."""
+    return [
+        {
+            "start_ball_round": int(hits[start].get("ball_round", start + 1)),
+            "end_ball_round": int(hits[end].get("ball_round", end + 1)),
+            "start_time_seconds": _time_seconds(hits[start]),
+            "end_time_seconds": _time_seconds(hits[end]),
+        }
+        for start, end in intervals
+    ]
+
+
+def _dominant_subtactic(subtactics: dict[str, list[tuple[int, int]]]) -> str | None:
+    """Pick the Four-Corner subtactic covering the most shots.
+
+    Mirrors CoachAI+ levels 2-4, which compare locks by covered length and
+    break ties by the latest interval end.
+    """
+    best: tuple[int, int] | None = None
+    best_tactic = None
+    for tactic in FOUR_CORNER_SUBTACTICS:
+        intervals = subtactics.get(tactic) or []
+        if not intervals:
+            continue
+        key = (
+            sum(end - start + 1 for start, end in intervals),
+            max(end for _, end in intervals),
+        )
+        if best is None or key > best:
+            best, best_tactic = key, tactic
+    return best_tactic
+
+
 def _interval_payload(
     tactic: str,
     intervals: list[tuple[int, int]],
@@ -82,18 +130,10 @@ def _interval_payload(
     evidence_quality: str,
     uses_landing_proxy: bool,
 ) -> dict[str, Any]:
-    ranges = []
-    for start, end in intervals:
-        ranges.append(
-            {
-                "start_ball_round": int(player_hits[start].get("ball_round", start + 1)),
-                "end_ball_round": int(player_hits[end].get("ball_round", end + 1)),
-            }
-        )
     return {
         "type": tactic,
         "label": TACTIC_LABELS[tactic],
-        "intervals": ranges,
+        "intervals": _interval_ranges(player_hits, intervals),
         "evidence_quality": evidence_quality,
         "confidence_calibrated": False,
         "uses_landing_proxy": uses_landing_proxy,
@@ -231,13 +271,7 @@ def analyze_coachai_plus_tactics(
                     {
                         "type": "defensive_counterattack",
                         "label": TACTIC_LABELS["defensive_counterattack"],
-                        "intervals": [
-                            {
-                                "start_ball_round": int(rally_hits[start].get("ball_round", start + 1)),
-                                "end_ball_round": int(rally_hits[end].get("ball_round", end + 1)),
-                            }
-                            for start, end in dc
-                        ],
+                        "intervals": _interval_ranges(rally_hits, dc),
                         "evidence_quality": "stroke_sequence_rule",
                         "confidence_calibrated": False,
                         "uses_landing_proxy": False,
@@ -278,8 +312,9 @@ def analyze_coachai_plus_tactics(
                     )
                 )
 
+            spatial["four_corner_clear_drop"] = fccd
             four_corner_intervals = _merge_intervals(
-                [interval for rows in spatial.values() for interval in rows] + fccd
+                [interval for rows in spatial.values() for interval in rows]
             )
             if four_corner_intervals:
                 coverage = sum(_landing(hit) is not None for hit in player_hits) / len(player_hits)
@@ -301,6 +336,9 @@ def analyze_coachai_plus_tactics(
                 fcp_end = max((end for _, end in fcp), default=-1)
                 corner_end = max((end for _, end in four_corner_intervals), default=-1)
                 primary = "full_court_pressure" if fcp_end >= corner_end else "four_corner"
+            elif dc:
+                # CoachAI+ keeps a lone counterattack even when it ends mid-rally.
+                primary = "defensive_counterattack"
 
             usage[player][primary] += 1
             records.append(
@@ -311,7 +349,13 @@ def analyze_coachai_plus_tactics(
                     "primary_tactic": primary,
                     "primary_tactic_label": TACTIC_LABELS[primary],
                     "detected_tactics": found,
+                    "four_corner_subtactic": (
+                        _dominant_subtactic(spatial) if four_corner_intervals else None
+                    ),
                     "shot_count": len(player_hits),
+                    "rally_length": len(rally_hits),
+                    "rally_start_time_seconds": _time_seconds(rally_hits[0]),
+                    "rally_end_time_seconds": _time_seconds(rally_hits[-1]),
                 }
             )
 
@@ -328,3 +372,62 @@ def analyze_coachai_plus_tactics(
             player: dict(sorted(counter.items())) for player, counter in usage.items()
         },
     }
+
+
+def attach_tactic_outcomes(
+    structured_tactics: dict[str, Any], scoreboard: dict[str, Any]
+) -> dict[str, Any]:
+    """Join tactic rows with rally winners and summarise tactic effectiveness.
+
+    A rally only counts towards a win rate when the scoreboard counted it, so
+    partial edge rallies and non-scoring exchanges never skew the rates.
+    """
+    outcomes = {
+        int(rally["rally_id"]): rally
+        for rally in scoreboard.get("rallies", [])
+        if "rally_id" in rally
+    }
+    usage: dict[str, dict[str, dict[str, Any]]] = {"upper": {}, "lower": {}}
+    subtactics: dict[str, Counter[str]] = {"upper": Counter(), "lower": Counter()}
+    for row in structured_tactics.get("rallies", []):
+        outcome = outcomes.get(int(row["rally_id"]), {})
+        winner = outcome.get("winner")
+        decided = bool(outcome.get("included_in_estimated_score")) and winner in ("upper", "lower")
+        row["rally_winner"] = winner if decided else None
+        row["won"] = (winner == row["player"]) if decided else None
+
+        player = row["player"]
+        if player not in usage:
+            continue
+        stats = usage[player].setdefault(
+            row["primary_tactic"],
+            {"uses": 0, "decided": 0, "wins": 0, "total_rally_length": 0},
+        )
+        stats["uses"] += 1
+        stats["total_rally_length"] += int(row.get("rally_length", 0))
+        if decided:
+            stats["decided"] += 1
+            stats["wins"] += int(row["won"])
+        if row.get("primary_tactic") == "four_corner" and row.get("four_corner_subtactic"):
+            subtactics[player][row["four_corner_subtactic"]] += 1
+
+    structured_tactics["effectiveness_by_player"] = {
+        player: {
+            tactic: {
+                "label": TACTIC_LABELS[tactic],
+                "uses": stats["uses"],
+                "decided_rallies": stats["decided"],
+                "wins": stats["wins"],
+                "win_rate": (
+                    round(stats["wins"] / stats["decided"], 4) if stats["decided"] else None
+                ),
+                "avg_rally_length": round(stats["total_rally_length"] / stats["uses"], 2),
+            }
+            for tactic, stats in sorted(tactics.items())
+        }
+        for player, tactics in usage.items()
+    }
+    structured_tactics["four_corner_subtactic_usage"] = {
+        player: dict(counter.most_common()) for player, counter in subtactics.items()
+    }
+    return structured_tactics

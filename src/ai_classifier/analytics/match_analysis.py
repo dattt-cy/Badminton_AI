@@ -90,6 +90,41 @@ def resolve_rally_winner(hits: list[dict[str, Any]]) -> tuple[str, str]:
     return opponent_of(last_hitter), "opponent_forced_error"
 
 
+def _rally_bounds_seconds(hits: list[dict[str, Any]], fps: float) -> tuple[float, float]:
+    start = int(hits[0].get("refined_frame", hits[0].get("frame", 0)))
+    end = int(hits[-1].get("refined_frame", hits[-1].get("frame", 0)))
+    return round(start / fps, 2), round(end / fps, 2)
+
+
+def infer_ocr_first_row_side(
+    rallies: list[list[dict[str, Any]]],
+    ocr_events: list[dict[str, Any]],
+    fps: float,
+) -> str:
+    """Decide which court side the scoreboard's first row belongs to.
+
+    Broadcast scoreboards list players in a fixed order unrelated to the
+    camera, so each OCR point change is compared with the next rally's server
+    (the rally winner serves next) and the majority vote wins.
+    """
+    votes: Counter[str] = Counter()
+    used: set[int] = set()
+    for i in range(len(rallies) - 1):
+        _, end_sec = _rally_bounds_seconds(rallies[i], fps)
+        next_start_sec, _ = _rally_bounds_seconds(rallies[i + 1], fps)
+        next_server = infer_rally_server(rallies[i + 1])
+        if next_server not in ("upper", "lower"):
+            continue
+        for ev_idx, ev in enumerate(ocr_events):
+            ev_time = float(ev.get("time_seconds", 0.0))
+            if ev_idx not in used and (end_sec - 3.0) <= ev_time <= (next_start_sec + 5.0):
+                used.add(ev_idx)
+                first_won = ev.get("point_winner") in ("first", "upper")
+                votes[next_server if first_won else opponent_of(next_server)] += 1
+                break
+    return "lower" if votes["lower"] > votes["upper"] else "upper"
+
+
 def analyze_scoreboard(
     predictions: list[dict[str, Any]],
     player_names: dict[str, str] | None = None,
@@ -115,7 +150,19 @@ def analyze_scoreboard(
     rally_keys = sorted(rallies_dict.keys())
     ocr_events: list[dict[str, Any]] = (scoreboard_ocr or {}).get("events", []) if isinstance(scoreboard_ocr, dict) else []
     initial_score = (scoreboard_ocr or {}).get("initial_score") if isinstance(scoreboard_ocr, dict) else None
-    
+    first_row_side = (
+        infer_ocr_first_row_side([rallies_dict[k] for k in rally_keys], ocr_events, fps)
+        if ocr_events else "upper"
+    )
+
+    def to_court_order(score: Any) -> Any:
+        """Reorder an OCR (first row, second row) score as (upper, lower)."""
+        if first_row_side == "lower" and isinstance(score, (list, tuple)) and len(score) == 2:
+            return [score[1], score[0]]
+        return score
+
+    initial_score = to_court_order(initial_score)
+
     if initial_score and isinstance(initial_score, (list, tuple)) and len(initial_score) == 2:
         curr_score = [int(initial_score[0]), int(initial_score[1])]
     else:
@@ -179,14 +226,20 @@ def analyze_scoreboard(
 
         if matched_ev:
             point_w = matched_ev.get("point_winner", "first")
-            winner = "upper" if point_w in ("first", "upper") else "lower"
+            first_won = point_w in ("first", "upper")
+            winner = first_row_side if first_won else opponent_of(first_row_side)
             reason = f"ocr_confirmed_{winner}"
-            curr_score = [int(matched_ev["score"][0]), int(matched_ev["score"][1])]
+            score = to_court_order(matched_ev["score"])
+            curr_score = [int(score[0]), int(score[1])]
             complete = True
             is_estimated = False
         elif i == 0 and ocr_events and end_sec < float(ocr_events[0].get("time_seconds", 0.0)):
             # First rally in video ending before first detected score change
-            prev_s = ocr_events[0].get("previous_score", initial_score or [0, 0])
+            prev_s = (
+                to_court_order(ocr_events[0]["previous_score"])
+                if "previous_score" in ocr_events[0]
+                else initial_score or [0, 0]
+            )
             curr_score = [int(prev_s[0]), int(prev_s[1])]
             stroke_winner, stroke_reason = resolve_rally_winner(hits)
             winner = "upper" if curr_score[0] > curr_score[1] else ("lower" if curr_score[1] > curr_score[0] else stroke_winner)
@@ -263,6 +316,7 @@ def analyze_scoreboard(
             "complete_rallies_counted": sum(r["included_in_estimated_score"] for r in rally_summaries),
             "game_number": game_number,
             "scope": "current_game",
+            "ocr_first_row_side": first_row_side if ocr_events else None,
         },
         "rallies": rally_summaries,
     }
@@ -700,8 +754,10 @@ def build_match_analysis(
     player_profiles = analyze_player_profiles(predictions, scoreboard, player_names)
     response_matrix = build_response_transition_matrix(predictions)
     coach_insights = generate_coach_insights(player_profiles, response_matrix, scoreboard, player_names)
-    from .tactics import analyze_coachai_plus_tactics
-    structured_tactics = analyze_coachai_plus_tactics(predictions, player_names)
+    from .tactics import analyze_coachai_plus_tactics, attach_tactic_outcomes
+    structured_tactics = attach_tactic_outcomes(
+        analyze_coachai_plus_tactics(predictions, player_names), scoreboard
+    )
     from .movement import analyze_sparse_movement
     movement = analyze_sparse_movement(predictions)
 
