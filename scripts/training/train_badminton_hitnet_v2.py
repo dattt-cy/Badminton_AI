@@ -474,6 +474,11 @@ def parse_args() -> argparse.Namespace:
         help="Root of pre-extracted windows (<split>/<match>_<center>_<frames>.npy). When set, "
              "train/val samples come from it and extra negatives are cached under extra_v3/.",
     )
+    parser.add_argument(
+        "--reuse-extra-windows", action="store_true",
+        help="Add every cached <window-cache>/extra_v3/*.npy window as no_hit (the mined/near-miss set "
+             "an earlier run cached) instead of rebuilding extra negatives.",
+    )
     return parser.parse_args()
 
 
@@ -515,6 +520,10 @@ def main() -> None:
     train_samples = train_samples[:int(len(train_samples) * args.train_fraction)]
     val_samples = val_samples[:int(len(val_samples) * args.val_fraction)]
     extra = build_extra_negatives(args)
+    if args.reuse_extra_windows and args.window_cache is not None:
+        for path in sorted((args.window_cache / "extra_v3").glob(f"*_{args.frames}.npy")):
+            match_id, center_text, _ = path.stem.split("_")
+            extra.append(Sample(match_id, Path(), int(center_text), 0, 0.0, f"extra_v3/{path.stem}"))
     if args.window_cache is not None:
         logger.log(f"[*] Pre-caching {len(extra):,} extra windows under {args.window_cache / 'extra_v3'}...")
         precache_windows(extra, args.window_cache, args.frames, args.workers)
