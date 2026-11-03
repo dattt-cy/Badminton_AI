@@ -36,7 +36,11 @@ def args() -> argparse.Namespace:
         Path("work_dirs/match13_5min_features.pt"),
         *[Path(f"work_dirs/online_train_match{match}_features.pt") for match in range(14, 18)],
     ])
-    parser.add_argument("--validation-online", type=Path, default=Path("work_dirs/match41_5min_aligned_features.pt"))
+    parser.add_argument("--validation-online", type=Path, nargs="+",
+                        default=[Path("work_dirs/match41_5min_aligned_features.pt")],
+                        help="Labeled records (gt_stroke_idx) used for checkpoint selection; pooled.")
+    parser.add_argument("--train-labeled", type=Path, nargs="*", default=[],
+                        help="Extra online records that already carry gt_stroke_idx (e.g. ShuttleSet22).")
     parser.add_argument("--output-dir", type=Path, default=Path("work_dirs/kap_online_pilot_match13"))
     parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--learning-rate", type=float, default=5e-6)
@@ -55,6 +59,20 @@ def args() -> argparse.Namespace:
         "--class-weight-power", type=float, default=0.5,
         help="Loss weight = (N / (K * count)) ** power; 0.5 is square-root inverse frequency.",
     )
+    parser.add_argument(
+        "--replay-size", type=int, default=4096,
+        help="Clean ShuttleSet train samples replayed during adaptation; 0 replays all of them.",
+    )
+    parser.add_argument("--replay-weight", type=float, default=0.5, help="Weight of the clean replay loss.")
+    parser.add_argument(
+        "--court-reference", choices=("mat", "lines"), default="mat",
+        help="Court quad the online records were extracted with; stored so the pipeline uses the same one.",
+    )
+    parser.add_argument(
+        "--selection-scope", choices=("online", "joint"), default="online",
+        help="online: select on the online validation match only. joint: average it with the clean "
+             "ShuttleSet validation macro-F1 so adaptation cannot silently forget the clean domain.",
+    )
     return parser.parse_args()
 
 
@@ -68,6 +86,12 @@ MODEL_CLASSES = {
 
 def stack(records: list[dict]) -> list[torch.Tensor]:
     return [torch.cat([row[key].detach().cpu() for row in records]).float() for key in KEYS]
+
+
+def load_labeled(path: Path) -> list[dict]:
+    """Records with gt_stroke_idx, stored as a list or as {"records": [...]}."""
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    return payload["records"] if isinstance(payload, dict) else payload
 
 
 def match_train(records: list[dict], match_id: str, offset: int) -> tuple[list[dict], torch.Tensor]:
@@ -113,18 +137,27 @@ def main() -> None:
         records = torch.load(path, map_location="cpu", weights_only=False)
         records, targets = match_train(records, match_id, offsets[match_id])
         online_records.extend(records); target_parts.append(targets); per_match[match_id] = len(records)
+    for path in cfg.train_labeled:
+        records = load_labeled(path)
+        online_records.extend(records); per_match[path.stem] = len(records)
+        target_parts.append(torch.tensor([row["gt_stroke_idx"] for row in records]).long())
     online_targets = torch.cat(target_parts)
     online_inputs = stack(online_records)
-    validation = torch.load(cfg.validation_online, map_location="cpu", weights_only=False)
+    validation = [row for path in cfg.validation_online for row in load_labeled(path)]
     validation_inputs = stack(validation)
     validation_targets = torch.tensor([row["gt_stroke_idx"] for row in validation]).long()
 
     clean, indices = load_data(cfg.clean)
     generator = torch.Generator().manual_seed(cfg.seed)
-    replay_ids = torch.from_numpy(indices["train"])[torch.randperm(len(indices["train"]), generator=generator)[:4096]]
+    replay_count = cfg.replay_size or len(indices["train"])
+    replay_ids = torch.from_numpy(indices["train"])[torch.randperm(len(indices["train"]), generator=generator)[:replay_count]]
     replay = TensorDataset(*[clean[key][replay_ids] for key in
         ("rgb", "pose", "court", "shuttle", "contact_dist", "quality", "stroke")])
     online = TensorDataset(*online_inputs, online_targets)
+    clean_val_ids = torch.from_numpy(indices["val"])
+    clean_val_inputs = [clean[key][clean_val_ids] for key in
+        ("rgb", "pose", "court", "shuttle", "contact_dist", "quality")]
+    clean_val_targets = clean["stroke"][clean_val_ids]
     replay_loader = DataLoader(replay, batch_size=64, shuffle=True, generator=generator)
     counts = torch.bincount(online_targets, minlength=len(STROKE_CLASSES)).float().clamp_min(1)
     if cfg.class_balance == "sampler":
@@ -140,6 +173,13 @@ def main() -> None:
     model_type = payload.get("model_type", "baseline")
     model = MODEL_CLASSES[model_type]().to(device); model.load_state_dict(payload["model"])
     baseline = evaluate(model, validation_inputs, validation_targets, device)
+    clean_baseline = evaluate(model, clean_val_inputs, clean_val_targets, device)
+
+    def selection_score(online_metrics: dict, clean_metrics: dict) -> float:
+        if cfg.selection_scope == "online":
+            return online_metrics[cfg.selection_metric]
+        return 0.5 * online_metrics[cfg.selection_metric] + 0.5 * clean_metrics["macro_f1"]
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.learning_rate, weight_decay=1e-4)
     criterion = nn.CrossEntropyLoss(label_smoothing=0.03)
     online_criterion = criterion
@@ -149,8 +189,9 @@ def main() -> None:
         online_criterion = nn.CrossEntropyLoss(
             weight=(weights / weights.mean()).to(device), label_smoothing=0.03,
         )
-    best_score = baseline[cfg.selection_metric]
+    best_score = selection_score(baseline, clean_baseline)
     best_metrics = baseline
+    best_clean_metrics = clean_baseline
     history = []
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     print(
@@ -170,29 +211,42 @@ def main() -> None:
                 clean_x = [value.to(device) for value in clean_batch[:6]]
                 online_loss = online_criterion(model(*online_x)[0], batch[6].to(device))
                 clean_loss = criterion(model(*clean_x)[0], clean_batch[6].to(device))
-                loss = online_loss + 0.5 * clean_loss
+                loss = online_loss + cfg.replay_weight * clean_loss
                 loss.backward(); nn.utils.clip_grad_norm_(model.parameters(), 1.0); optimizer.step()
                 total_loss += float(loss.detach())
         metrics = evaluate(model, validation_inputs, validation_targets, device)
-        row = {"epoch": epoch, "loss": total_loss, "validation": metrics}; history.append(row)
-        print(f"epoch={epoch:02d} val_acc={metrics['accuracy']:.4f} val_f1={metrics['macro_f1']:.4f}", flush=True)
-        if metrics[cfg.selection_metric] > best_score:
-            best_score = metrics[cfg.selection_metric]
+        clean_metrics = evaluate(model, clean_val_inputs, clean_val_targets, device)
+        score = selection_score(metrics, clean_metrics)
+        row = {"epoch": epoch, "loss": total_loss, "validation": metrics, "clean_validation": clean_metrics,
+               "selection_score": score}
+        history.append(row)
+        print(f"epoch={epoch:02d} val_acc={metrics['accuracy']:.4f} val_f1={metrics['macro_f1']:.4f} "
+              f"clean_val_acc={clean_metrics['accuracy']:.4f} clean_val_f1={clean_metrics['macro_f1']:.4f} "
+              f"score={score:.4f}", flush=True)
+        if score > best_score:
+            best_score = score
             best_metrics = metrics
+            best_clean_metrics = clean_metrics
             torch.save({"model": model.state_dict(), "epoch": epoch, "model_type": model_type,
                         "base_checkpoint": str(cfg.base), "online_train_matches": sorted(per_match),
-                        "online_validation_match": "41", "val_metrics": metrics,
+                        "online_validation": [str(path) for path in cfg.validation_online], "val_metrics": metrics,
                         "selection_metric": cfg.selection_metric,
                         "selection_score": best_score,
                         "class_balance": cfg.class_balance,
-                        "class_weight_power": cfg.class_weight_power},
+                        "class_weight_power": cfg.class_weight_power,
+                        "replay_size": replay_count, "replay_weight": cfg.replay_weight,
+                        "selection_scope": cfg.selection_scope, "clean_val_metrics": clean_metrics,
+                        "context_window": payload.get("context_window"),
+                        "court_reference": cfg.court_reference},
                        cfg.output_dir / "best.pth")
     result = {"protocol": "online_train_matches13_17_validate_match41", "offsets": offsets,
               "per_match": per_match,
               "online_train_samples": len(online), "baseline": baseline,
               "selection_metric": cfg.selection_metric,
               "best_score": best_score, "best_metrics": best_metrics,
-              "best_accuracy": best_metrics["accuracy"], "history": history}
+              "best_accuracy": best_metrics["accuracy"], "clean_baseline": clean_baseline,
+              "best_clean_metrics": best_clean_metrics, "selection_scope": cfg.selection_scope,
+              "replay_size": replay_count, "replay_weight": cfg.replay_weight, "history": history}
     (cfg.output_dir / "metrics.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({
         "selection_metric": cfg.selection_metric,
