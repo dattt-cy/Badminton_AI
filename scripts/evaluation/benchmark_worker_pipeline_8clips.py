@@ -40,6 +40,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kap-checkpoint", type=Path, default=CKPTS / "kap_classifier.pth")
     parser.add_argument("--hit-checkpoint", type=Path, default=CKPTS / "hit_detector.pth")
+    parser.add_argument("--extra-hit-checkpoint", type=Path, default=None,
+                        help="Second hit detector; each scan window keeps the higher of the two scores.")
+    parser.add_argument("--threshold", type=float, default=WORKER_SETTINGS["threshold"])
+    parser.add_argument("--alternation-gap", type=int, default=None,
+                        help="Drop the weaker of two same-side hits closer than this many frames.")
     parser.add_argument("--clips", type=str, default=None, help="Comma-separated clip numbers, e.g. 3,1,2.")
     parser.add_argument("--min-shuttle-visibility", type=float, default=0.25,
                         help="Pipeline default; 0 keeps every candidate so thresholds can be swept offline.")
@@ -81,7 +86,9 @@ def main() -> None:
                 player_upper=cfg["player_upper"], player_lower=cfg["player_lower"],
                 hit_checkpoint=args.hit_checkpoint, kap_checkpoint=args.kap_checkpoint,
                 pose_model=CKPTS / "yolov8n-pose.pt", rally_model=CKPTS / "rally_boundary_detector.joblib",
-                min_shuttle_visibility=args.min_shuttle_visibility, **WORKER_SETTINGS,
+                min_shuttle_visibility=args.min_shuttle_visibility, extra_hit_checkpoint=args.extra_hit_checkpoint,
+                alternation_gap_frames=args.alternation_gap,
+                **{**WORKER_SETTINGS, "threshold": args.threshold},
             )
             print(f"    done in {time.time() - started:.0f}s", flush=True)
         payload = json.loads(output.read_text(encoding="utf-8"))

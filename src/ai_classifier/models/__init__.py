@@ -6,6 +6,7 @@ from .taxonomy import SIDE_CLASSES, STROKE_CLASSES
 from .multi_task_r2plus1d import MultiTaskR2Plus1D
 from .kap_fusion import KAPCrossTransModel, KAPCrossTransV2Model, KAPScratchModel
 from .badminton_hitnet import BadmintonHitNet, BadmintonHitNetV2
+from .own_rgb_encoder import OwnRGBEncoder
 
 CHECKPOINTS_DIR = Path(__file__).resolve().parent / "checkpoints"
 
@@ -20,6 +21,7 @@ __all__ = [
     "BadmintonHitNet",
     "BadmintonHitNetV2",
     "MultiTaskR2Plus1D",
+    "OwnRGBEncoder",
     "KAPScratchModel",
     "KAPCrossTransModel",
     "KAPCrossTransV2Model",
