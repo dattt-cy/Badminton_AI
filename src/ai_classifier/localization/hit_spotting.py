@@ -277,3 +277,23 @@ def rescue_alternating_bridges(
     unique = {(event.frame, event.side): event for event in merged}
     return sorted(unique.values(), key=lambda event: event.frame)
 
+
+
+def enforce_alternation(events: Sequence[HitEvent], max_gap_frames: int = 60) -> list[HitEvent]:
+    """Drop the weaker of two consecutive same-side hits closer than ``max_gap_frames``.
+
+    Singles hitters alternate, so a same-side pair within one flight time holds a
+    spurious detection: a duplicate of a real hit, the receiver's preparation, or a
+    between-rally shuttle return. Run after rescue_alternating_bridges, which first
+    tries to restore a missed opposite-side hit between such a pair.
+    """
+    kept = sorted(events, key=lambda event: event.frame)
+    index = 0
+    while index < len(kept) - 1:
+        current, following = kept[index], kept[index + 1]
+        if current.side == following.side and following.frame - current.frame <= max_gap_frames:
+            kept.pop(index if current.score < following.score else index + 1)
+            index = max(index - 1, 0)
+        else:
+            index += 1
+    return kept
