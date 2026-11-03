@@ -35,6 +35,7 @@ from ai_classifier.models import (
     KAPCrossTransV2Model,
     KAPScratchModel,
     MultiTaskR2Plus1D,
+    OwnRGBEncoder,
     SIDE_CLASSES,
     STROKE_CLASSES,
 )
@@ -49,6 +50,14 @@ COURT_CORNERS_PROFILE = {
     "default": np.float32([[298.0, 656.0], [980.0, 656.0], [858.0, 306.0], [411.0, 306.0]]),
 }
 DST_PTS = np.float32([[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]])
+
+# BST "between 2 hits with max limits" clips (30 fps): a stroke's sequence starts at
+# the previous hit (first hit of a rally: hit-15) and ends at the next hit+7 (last
+# hit: hit+15). Hits further apart than RALLY_GAP_FRAMES belong to different rallies.
+RALLY_GAP_FRAMES = 75
+RALLY_EDGE_FRAMES = 15
+NEXT_HIT_TAIL_FRAMES = 7
+SAME_EVENT_FRAMES = 8
 
 
 def resample(array: np.ndarray, target_length: int = 32) -> np.ndarray:
@@ -131,15 +140,6 @@ class AlignedVideoPipeline:
         self._pose_cache: dict[int, dict] = {}
         self._shuttle_cache: dict[int, tuple[float, float]] = {}
 
-        print("[*] Loading R(2+1)D Visual Backbone...")
-        self.rgb_model = MultiTaskR2Plus1D().to(DEVICE)
-        backbone_ckpt = REPO_ROOT / "src" / "ai_classifier" / "models" / "checkpoints" / "visual_backbone.pth"
-        if not backbone_ckpt.exists():
-            backbone_ckpt = REPO_ROOT / "work_dirs" / "r2plus1d18_mixed_shuttleset_finebadminton" / "best.pth"
-        rgb_ckpt = torch.load(str(backbone_ckpt), map_location="cpu", weights_only=False)
-        self.rgb_model.load_state_dict(rgb_ckpt["model"], strict=False)
-        self.rgb_model.eval()
-
         print(f"[*] Loading robust scratch KAP classifier: {ckpt_path}...")
         clf_ckpt = torch.load(ckpt_path, map_location=DEVICE, weights_only=False)
         model_type = clf_ckpt.get("model_type", "baseline")
@@ -149,9 +149,32 @@ class AlignedVideoPipeline:
             model_class = KAPCrossTransModel
         else:
             model_class = KAPScratchModel
-        self.clf = model_class().to(DEVICE)
+        # Checkpoints built on the team's RGB encoder carry its weights and input size.
+        if "rgb_encoder" in clf_ckpt:
+            self.clf = KAPCrossTransV2Model(rgb_dim=clf_ckpt["rgb_dim"], gate_free=clf_ckpt["gate_free"]).to(DEVICE)
+            self.rgb_model = OwnRGBEncoder().to(DEVICE)
+            self.rgb_model.load_state_dict(clf_ckpt["rgb_encoder"])
+            self.rgb_model.eval()
+            print("[*] RGB branch: team-built encoder from the KAP checkpoint.")
+        else:
+            self.clf = model_class().to(DEVICE)
+            print("[*] Loading R(2+1)D Visual Backbone...")
+            self.rgb_model = MultiTaskR2Plus1D().to(DEVICE)
+            backbone_ckpt = REPO_ROOT / "src" / "ai_classifier" / "models" / "checkpoints" / "visual_backbone.pth"
+            if not backbone_ckpt.exists():
+                backbone_ckpt = REPO_ROOT / "work_dirs" / "r2plus1d18_mixed_shuttleset_finebadminton" / "best.pth"
+            rgb_ckpt = torch.load(str(backbone_ckpt), map_location="cpu", weights_only=False)
+            self.rgb_model.load_state_dict(rgb_ckpt["model"], strict=False)
+            self.rgb_model.eval()
         self.clf.load_state_dict(clf_ckpt["model"])
         self.clf.eval()
+        # Checkpoints trained on BST's longer between-hit context store their
+        # (before, after) window; older checkpoints keep the 15/30 extract_features window.
+        window = clf_ckpt.get("context_window")
+        self.context_window = tuple(int(v) for v in window) if window else None
+        self._event_frames: np.ndarray | None = None
+        if self.context_window:
+            print(f"[*] KAP context window: hit-{self.context_window[0]}..hit+{self.context_window[1]}")
 
         print("[*] Direct Robust KAP Top-1 enabled.")
 
@@ -245,6 +268,8 @@ class AlignedVideoPipeline:
         the same run, then reused by every event. No persistent cache is needed.
         """
         radius = max(0, int(contact_refine_radius))
+        if self.context_window:
+            before, after = max(before, self.context_window[0]), max(after, self.context_window[1])
         ranges = self._merge_event_ranges(
             [int(frame) for frame in event_frames], total_frames,
             before + radius, after + radius,
@@ -302,14 +327,57 @@ class AlignedVideoPipeline:
             "shuttle_frames": len(self._shuttle_cache),
         }
 
+    def set_event_frames(self, frames: list[int]) -> None:
+        """Register every candidate hit of the video so a long context window can stop at its neighbours."""
+        self._event_frames = np.sort(np.asarray(frames, dtype=np.int64))
+
+    def _context_bounds(self, frame: int, hit: int) -> tuple[int, int]:
+        """First and last frame of the BST between-hit sequence of the hit at ``hit``."""
+        before, after = self.context_window
+        if self._event_frames is None:
+            return hit - before, hit + after
+        events = self._event_frames
+        previous = events[(events < frame - SAME_EVENT_FRAMES) & (events >= hit - RALLY_GAP_FRAMES)]
+        following = events[(events > frame + SAME_EVENT_FRAMES) & (events <= hit + RALLY_GAP_FRAMES)]
+        first = max(int(previous[-1]), hit - before) if len(previous) else hit - RALLY_EDGE_FRAMES
+        last = (min(int(following[0]) + NEXT_HIT_TAIL_FRAMES, hit + after)
+                if len(following) else hit + RALLY_EDGE_FRAMES)
+        return first, last
+
+    def _context_window_inputs(
+        self, frame: int, frame_indices: list[int], contact: int,
+        raw_pose: np.ndarray, raw_court: np.ndarray, raw_shuttle: np.ndarray,
+    ) -> tuple[np.ndarray, ...]:
+        """KAP streams over hit-before..hit+after, zero outside the between-hit sequence as in training."""
+        before, after = self.context_window
+        hit = frame_indices[contact]
+        first, last = self._context_bounds(frame, hit)
+        offsets = np.arange(-before, after + 1)
+        source = contact + offsets
+        valid = (source >= 0) & (source < len(frame_indices)) & (hit + offsets >= first) & (hit + offsets <= last)
+        windows = []
+        for array in (raw_pose, raw_court, raw_shuttle):
+            padded = np.zeros((len(offsets), array.shape[1]), dtype=np.float32)
+            padded[valid] = np.nan_to_num(array[source[valid]])
+            windows.append(padded)
+        pose, court, shuttle = windows
+        s_q = np.asarray(modality_quality_vector(pose, shuttle), dtype=np.float32)
+        s_q[[1, 3]] /= 100.0
+        s_c = np.linspace(-before, after, 32, dtype=np.float32)[:, None] / float(before)
+        return resample(pose, 32), resample(court, 32), resample(shuttle, 32), s_c, s_q
+
     def extract_features(
         self, cap: cv2.VideoCapture, hf_clip: int, total_frames: int,
         hitter_side: str = "lower", before: int = 15, after: int = 30,
         contact_refine_radius: int = 6,
     ) -> dict | None:
         refine_radius = max(0, int(contact_refine_radius))
-        start_f = max(0, hf_clip - before - refine_radius)
-        end_f = min(total_frames - 1, hf_clip + after + refine_radius)
+        decode_before, decode_after = (
+            (max(before, self.context_window[0]), max(after, self.context_window[1]))
+            if self.context_window else (before, after)
+        )
+        start_f = max(0, hf_clip - decode_before - refine_radius)
+        end_f = min(total_frames - 1, hf_clip + decode_after + refine_radius)
 
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
         frames_bgr, frame_indices = [], []
@@ -387,6 +455,10 @@ class AlignedVideoPipeline:
             raw_shuttle, selected_wrists, original_contact, refine_radius
         )
         refined_hit_frame = frame_indices[refined_contact]
+        context_inputs = (
+            self._context_window_inputs(hf_clip, frame_indices, refined_contact, raw_pose, raw_court, raw_shuttle)
+            if self.context_window else None
+        )
 
         # Realign every modality around the refined contact while preserving the
         # same training window. Extra margin was decoded only for refinement.
@@ -422,6 +494,9 @@ class AlignedVideoPipeline:
         s_q = modality_quality_vector(raw_pose, raw_shuttle)
         s_q = np.asarray(s_q, dtype=np.float32)
         s_q[[1, 3]] /= 100.0
+        if context_inputs is not None:
+            # The classifier sees the long window; analytics keep the before/after window above.
+            s_j, s_p, s_s, s_c, s_q = context_inputs
 
         # 5. RGB: reproduce the training recipe (stable hitter crop, 16 samples
         # spanning the entire event window, padding=0.55).

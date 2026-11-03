@@ -64,6 +64,49 @@ def _largest_contour_quad(mask: np.ndarray, frame_shape: tuple) -> np.ndarray | 
     return box.astype(np.float32)
 
 
+def _refine_corners_by_edges(mask: np.ndarray, ordered: np.ndarray) -> np.ndarray:
+    """Replace each corner by the intersection of the two adjacent fitted edges.
+
+    The morphological opening in ``_detect_court_mask`` rounds off the acute
+    baseline corners, so the polygon approximation picks a vertex on the cut
+    and pulls that corner inwards. Fitting a line to the middle part of every
+    side ignores the cut, and intersecting neighbouring lines restores it.
+    """
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not contours:
+        return ordered
+    points = max(contours, key=cv2.contourArea).reshape(-1, 2).astype(np.float32)
+    lines = []
+    for i in range(4):
+        a, b = ordered[i], ordered[(i + 1) % 4]
+        side = b - a
+        length = float(np.linalg.norm(side))
+        if length < 1:
+            return ordered
+        direction = side / length
+        rel = points - a
+        t = rel @ direction / length
+        dist = np.abs(rel[:, 0] * direction[1] - rel[:, 1] * direction[0])
+        selected = points[(t > 0.15) & (t < 0.85) & (dist < max(6.0, 0.03 * length))]
+        if len(selected) < 10:
+            return ordered
+        vx, vy, x0, y0 = cv2.fitLine(selected, cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
+        lines.append((np.array([x0, y0]), np.array([vx, vy])))
+    refined = []
+    for i in range(4):
+        (p1, d1), (p2, d2) = lines[i - 1], lines[i]
+        det = d1[0] * -d2[1] + d1[1] * d2[0]
+        if abs(det) < 1e-6:
+            return ordered
+        s = ((p2 - p1)[0] * -d2[1] + (p2 - p1)[1] * d2[0]) / det
+        refined.append(p1 + s * d1)
+    refined = np.array(refined, dtype=np.float32)
+    # A refinement that moves a corner far away means the edge fit was wrong.
+    if np.linalg.norm(refined - ordered, axis=1).max() > 0.08 * mask.shape[1]:
+        return ordered
+    return refined
+
+
 def _order_corners(pts: np.ndarray) -> np.ndarray:
     """
     Order corners as: BL, BR, TR, TL
@@ -133,6 +176,152 @@ def _hough_line_corners(frame: np.ndarray, mask: np.ndarray) -> np.ndarray | Non
     return np.array([bl, br, tr, tl], dtype=np.float32)
 
 
+# Doubles court in metres (x across 0..6.1, y along 0..13.4, far baseline y=0).
+# The returned corners are the outer doubles corners, as in ShuttleSet's homography.csv.
+_COURT_W, _COURT_L = 6.1, 13.4
+_COURT_LINES = [
+    ((0.0, 0.0), (6.1, 0.0)), ((0.0, 13.4), (6.1, 13.4)),          # baselines
+    ((0.0, 0.76), (6.1, 0.76)), ((0.0, 12.64), (6.1, 12.64)),      # doubles long service lines
+    ((0.0, 4.72), (6.1, 4.72)), ((0.0, 8.68), (6.1, 8.68)),        # short service lines
+    ((0.0, 0.0), (0.0, 13.4)), ((6.1, 0.0), (6.1, 13.4)),          # doubles sidelines
+    ((0.46, 0.0), (0.46, 13.4)), ((5.64, 0.0), (5.64, 13.4)),      # singles sidelines
+    ((3.05, 0.0), (3.05, 4.72)), ((3.05, 8.68), (3.05, 13.4)),     # centre lines
+]
+_LINE_SAMPLES = np.concatenate([
+    np.linspace(a, b, 60) for a, b in (tuple(map(np.asarray, line)) for line in _COURT_LINES)
+]).astype(np.float32)
+_UNIT_CORNERS = np.float32([[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]])  # BL, BR, TR, TL
+
+
+def _line_mask(frame: np.ndarray) -> np.ndarray:
+    """Thin bright structures (court lines) as a float map in [0, 1]."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    tophat = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15)))
+    mask = (tophat > 35).astype(np.uint8)
+    return cv2.GaussianBlur(mask.astype(np.float32), (5, 5), 0) > 0.2
+
+
+def _line_score(corners: np.ndarray, lines: np.ndarray) -> float:
+    """Fraction of projected court-line samples that land on a bright line pixel."""
+    h_mat = cv2.getPerspectiveTransform(_UNIT_CORNERS, corners.astype(np.float32))
+    unit = _LINE_SAMPLES / np.float32([_COURT_W, _COURT_L])
+    pts = cv2.perspectiveTransform(unit[None], h_mat)[0]
+    x, y = np.rint(pts[:, 0]).astype(int), np.rint(pts[:, 1]).astype(int)
+    inside = (x >= 0) & (x < lines.shape[1]) & (y >= 0) & (y < lines.shape[0])
+    hits = np.zeros(len(pts), dtype=bool)
+    hits[inside] = lines[y[inside], x[inside]]
+    return float(hits.mean())
+
+
+def _fit_court_lines(frame: np.ndarray, corners: np.ndarray, green: np.ndarray) -> tuple[np.ndarray, float]:
+    """Move the four corners so the court-line model overlaps the painted lines (coordinate ascent).
+
+    The search runs coarse-to-fine: large steps on thickened lines, then small steps on
+    the thin line mask. The court must keep a plausible share of the green-mat area so
+    the model cannot collapse onto a single bright line.
+    """
+    fine = _line_mask(frame)
+    coarse = cv2.dilate(fine.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
+    green_area = cv2.contourArea(green.astype(np.float32))
+    x_min, y_min = green.min(axis=0) - 15
+    x_max, y_max = green.max(axis=0) + 15
+
+    def plausible(quad: np.ndarray) -> bool:
+        ratio = cv2.contourArea(quad) / max(green_area, 1.0)
+        return (0.25 <= ratio <= 1.05 and np.all(quad[:, 0] >= x_min) and np.all(quad[:, 0] <= x_max)
+                and np.all(quad[:, 1] >= y_min) and np.all(quad[:, 1] <= y_max))
+
+    best = corners.astype(np.float32).copy()
+    for lines, steps in ((coarse, (32, 16, 8)), (fine, (6, 3, 1))):
+        best_score = _line_score(best, lines)
+        for step in steps:
+            improved = True
+            while improved:
+                improved = False
+                for corner in range(4):
+                    for axis in range(2):
+                        for sign in (-1, 1):
+                            trial = best.copy()
+                            trial[corner, axis] += sign * step
+                            if not plausible(trial):
+                                continue
+                            score = _line_score(trial, lines)
+                            if score > best_score:
+                                best, best_score, improved = trial, score, True
+    return best, best_score
+
+
+def _shrink_towards_lines(green: np.ndarray, frame: np.ndarray, keep: int = 4) -> list[np.ndarray]:
+    """Initial guesses: the green-mat quad shrunk by a grid of margins, best line overlap first.
+
+    The mat can extend far beyond the court, and green advertising boards can pull its
+    top edge up to the stands, so the margins cover a wide range.
+    """
+    bl, br, tr, tl = green
+    coarse = cv2.dilate(_line_mask(frame).astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
+    scored = []
+    for bottom in np.arange(0.0, 0.22, 0.03):
+        for top in np.arange(0.0, 0.46, 0.05):
+            for side in (0.0, 0.05, 0.10):
+                left_bottom = bl + bottom * (tl - bl)
+                right_bottom = br + bottom * (tr - br)
+                left_top = tl + top * (bl - tl)
+                right_top = tr + top * (br - tr)
+                quad = np.float32([
+                    left_bottom + side * (right_bottom - left_bottom), right_bottom + side * (left_bottom - right_bottom),
+                    right_top + side * (left_top - right_top), left_top + side * (right_top - left_top),
+                ])
+                scored.append((_line_score(quad, coarse), quad))
+    scored.sort(key=lambda item: -item[0])
+    return [green] + [quad for _, quad in scored[:keep]]
+
+
+def _resolve_line_aliasing(
+    frame: np.ndarray, fit: tuple[np.ndarray, float], green: np.ndarray,
+) -> tuple[np.ndarray, float]:
+    """Re-fit after shifting by one line spacing; keep the best-scoring court.
+
+    Parallel lines close together (singles/doubles sidelines 0.46 m apart, baseline and
+    doubles long service line 0.76 m apart) give local optima where the whole model sits
+    one spacing outside or inside the court.
+    """
+    side, end = 0.46 / _COURT_W, 0.76 / _COURT_L
+    best = fit
+    for dx, dy in ((side, 0.0), (-side, 0.0), (0.0, end), (0.0, -end), (side, end), (-side, -end)):
+        h_mat = cv2.getPerspectiveTransform(_UNIT_CORNERS, best[0].astype(np.float32))
+        unit = np.float32([[dx, 1 - dy], [1 - dx, 1 - dy], [1 - dx, dy], [dx, dy]])
+        shifted = cv2.perspectiveTransform(unit[None], h_mat)[0]
+        trial = _fit_court_lines(frame, shifted, green)
+        if trial[1] > best[1]:
+            best = trial
+    return best
+
+
+def detect_court_line_corners(video_path: str, min_score: float = 0.55) -> np.ndarray:
+    """Court corners on the painted outer lines, refined from the green-mat quad.
+
+    The green mat usually extends beyond the court, so the mat quad overstates the
+    court (about 80 px at the near baseline on ShuttleSet broadcasts). Falls back to
+    the mat quad when the line model does not fit well.
+    """
+    green = detect_court_corners(video_path)
+    fits = []
+    for frame in _get_candidate_frames(video_path, n_candidates=12):
+        best = max((_fit_court_lines(frame, guess, green) for guess in _shrink_towards_lines(green, frame)),
+                   key=lambda r: r[1])
+        if best[1] >= min_score:
+            best = _resolve_line_aliasing(frame, best, green)
+        if best[1] >= min_score and _validate_corners(best[0], frame.shape):
+            fits.append((best[1], best[0]))
+    if not fits:
+        return green
+    if len(fits) <= 2:
+        # Too few fits for a medoid; a replay or alternate camera can still fit its own
+        # lines well, so prefer the court lying closest to the main-camera mat quad.
+        return min(fits, key=lambda item: float(np.abs(item[1] - green).sum()))[1]
+    return _consensus_corners(fits)
+
+
 def detect_court_corners(video_path: str) -> np.ndarray:
     """
     Detect 4 court corners automatically from the video.
@@ -146,6 +335,9 @@ def detect_court_corners(video_path: str) -> np.ndarray:
             continue
         corners = _largest_contour_quad(mask, frame.shape)
         if corners is not None and _validate_corners(corners, frame.shape):
+            refined = _refine_corners_by_edges(mask, _order_corners(corners))
+            if _validate_corners(refined, frame.shape):
+                corners = refined
             candidates.append((_green_pixel_count(frame), _order_corners(corners)))
             continue
         corners = _hough_line_corners(frame, mask)

@@ -46,11 +46,13 @@ from ai_classifier.analytics import (  # noqa: E402
     rescore_strokes_by_flight_time,
 )
 from ai_classifier.localization import (  # noqa: E402
+    HitEvent,
+    enforce_alternation,
     rescue_alternating_bridges,
     two_stage_temporal_nms,
     rescue_pre_rally_serves,
 )
-from scripts.inference.auto_court_detection import detect_court_corners  # noqa: E402
+from scripts.inference.auto_court_detection import detect_court_corners, detect_court_line_corners  # noqa: E402
 from scripts.inference.robust_aligned_video_pipeline import AlignedVideoPipeline  # noqa: E402
 from scripts.inference.scan_video_hit_rgb import load_model, scan_video  # noqa: E402
 
@@ -205,6 +207,8 @@ def analyze_badminton_video(
     player_upper: str = "Player Upper",
     player_lower: str = "Player Lower",
     hit_checkpoint: Path | str = REPO_ROOT / "work_dirs" / "r2plus1d18_hit_full" / "best.pth",
+    extra_hit_checkpoint: Path | str | None = None,
+    alternation_gap_frames: int | None = None,
     kap_checkpoint: Path | str = REPO_ROOT / "work_dirs" / "kap_online_balanced_selection_20261008" / "best.pth",
     pose_model: Path | str = REPO_ROOT / "models" / "checkpoints" / "pose" / "yolov8n-pose.pt",
     rally_model: Path | str = REPO_ROOT / "work_dirs" / "rally_boundary_detector.joblib",
@@ -264,6 +268,19 @@ def analyze_badminton_video(
         device=device,
         use_amp=use_amp and device.type == "cuda",
     )
+    if extra_hit_checkpoint is not None:
+        # Two hit detectors scanned at the same window centres; each window keeps the higher
+        # score. The production detector is strongest on 2018-2021 broadcasts, the
+        # ShuttleSet22-tuned one on newer venues, and the max keeps both recalls.
+        del hit_model
+        hit_model, _ = load_model(Path(extra_hit_checkpoint))
+        hit_model.to(device).eval()
+        extra = {(e.frame, e.side): e.score for e in scan_video(
+            video_path, hit_model, n_frames, stride=stride, batch_size=batch_size,
+            device=device, use_amp=use_amp and device.type == "cuda",
+        )}
+        raw_events = [HitEvent(e.frame, e.side, max(e.score, extra.get((e.frame, e.side), 0.0)))
+                      for e in raw_events]
     events = two_stage_temporal_nms(
         raw_events,
         threshold=threshold,
@@ -285,6 +302,8 @@ def analyze_badminton_video(
             nms_radius=nms_radius,
             same_side_radius=same_side_nms_radius,
         )
+    if alternation_gap_frames:
+        events = enforce_alternation(events, alternation_gap_frames)
     scan_time = time.time() - t0_scan
     del hit_model
     if device.type == "cuda":
@@ -302,7 +321,11 @@ def analyze_badminton_video(
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = float(cap.get(cv2.CAP_PROP_FPS)) or 30.0
 
-        corners = detect_court_corners(str(video_path))
+        # Checkpoints fine-tuned on court-line coordinates say so; older ones were adapted
+        # to the green-mat quad and keep it.
+        court_reference = torch.load(kap_checkpoint, map_location="cpu", weights_only=False).get("court_reference", "mat")
+        detect = detect_court_line_corners if court_reference == "lines" else detect_court_corners
+        corners = detect(str(video_path))
         pipeline = AlignedVideoPipeline(
             ckpt_path=Path(kap_checkpoint),
             corners=corners,
@@ -316,6 +339,7 @@ def analyze_badminton_video(
         print(f"\n--- STEP 3/5: MULTI-MODAL STROKE CLASSIFICATION ({len(events)} candidates) ---")
         t0_classify = time.time()
         cache_stats = None
+        pipeline.set_event_frames([event.frame for event in events])
         if shared_cache:
             cache_stats = pipeline.prepare_event_cache(
                 cap,

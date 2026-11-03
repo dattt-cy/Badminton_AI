@@ -365,6 +365,13 @@ class KAPCrossTransModel(nn.Module):
         return self.stroke_head(fused), self.side_head(fused), gates
 
 
+class UnitGate(nn.Module):
+    """Quality gate of checkpoints trained without one: every modality keeps full weight."""
+
+    def forward(self, quality: torch.Tensor) -> torch.Tensor:
+        return torch.ones(quality.shape[0], 4, device=quality.device, dtype=quality.dtype)
+
+
 class KAPCrossTransV2Model(nn.Module):
     """BST-Disentangled Dual-Branch CrossTrans with Quality-Gated Residual.
 
@@ -385,6 +392,7 @@ class KAPCrossTransV2Model(nn.Module):
         hidden_dim: int = 128,
         dropout: float = 0.20,
         cross_heads: int = 4,
+        gate_free: bool = False,
     ) -> None:
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -443,14 +451,17 @@ class KAPCrossTransV2Model(nn.Module):
             nn.Dropout(dropout),
         )
 
-        self.quality_gate = nn.Sequential(
-            nn.Linear(quality_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, 4),
-            nn.Sigmoid(),
-        )
-        nn.init.zeros_(self.quality_gate[2].weight)
-        nn.init.constant_(self.quality_gate[2].bias, 2.0)
+        if gate_free:
+            self.quality_gate = UnitGate()
+        else:
+            self.quality_gate = nn.Sequential(
+                nn.Linear(quality_dim, hidden_dim),
+                nn.GELU(),
+                nn.Linear(hidden_dim, 4),
+                nn.Sigmoid(),
+            )
+            nn.init.zeros_(self.quality_gate[2].weight)
+            nn.init.constant_(self.quality_gate[2].bias, 2.0)
 
         token_count = 5
         self.fusion_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
