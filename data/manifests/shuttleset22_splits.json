@@ -1,0 +1,27 @@
+{
+  "_note": "ShuttleSet22 matches downloaded from BWF TV (indices into download_list.json). Test matches were not used for any training or selection decision.",
+  "train": [
+    "Akane_YAMAGUCHI_AN_Seyoung_YONEX_All_England_Open_Badminton_Championships_2022_Finals",
+    "Ratchanok_INTANON_CHEN_Yu_Fei_PETRONAS_Malaysia_Open_2022_Finals",
+    "Akane_YAMAGUCHI_AN_Se_Young_BWF_World_Championships_2022_Semi_finals",
+    "Akane_YAMAGUCHI_CHEN_Yu_Fei_BWF_World_Championships_2022_Finals",
+    "Akane_YAMAGUCHI_AN_Se_Young_DAIHATSU_YONEX_Japan_Open_2022_Finals",
+    "Akane_YAMAGUCHI_CHEN_Yu_Fei_England_Open_2022_Semi_finals",
+    "Lakshya_SEN_LOH_Kean_Yew_YONEX_SUNRISE_India_Open_2022_ Finals",
+    "Kunlavut_VITIDSARN_LEE_Zii_Jia_YONEX_GAINWARD_German_Open_2022_SemiFinals",
+    "Viktor_AXELSEN_Lakshya_SEN_YONEX_All_England_Open_2022_Finals",
+    "AN_Seyoung_PUSARLA_V._Sindhu_Korea_Open_Badminton_Championships_2022_Semi_Final",
+    "Viktor_AXELSEN_Anthony_Sinisuka_GINTING_DAIHATSU_INDONESIA_MASTERS_2022_Semifinals",
+    "Viktor_AXELSEN_Jonatan_CHRISTIE_Malaysia_Open_2022_SemiFinals",
+    "Viktor_AXELSEN_Kento_MOMOTA_PETRONAS_Malaysia_Open_2022_Finals"
+  ],
+  "val": [
+    "Ratchanok_INTANON_WANG_Zhi_Yi_Malaysia_Open_2022_SemiFinals",
+    "Kento_MOMOTA_Kunlavut_VITIDSARN_Malaysia_Open_2022_ Semi_finals"
+  ],
+  "test": [
+    "Busanan_ONGBAMRUNGPHAN_Supanida_KATETHONG_India_Open_2022_Finals",
+    "Viktor_AXELSEN_LEE_Zii_Jia_EAST_VENTURES_Indonesia_Open_2022_Semifinals",
+    "Chico_Aura_DWI_WARDOYO_LU_Guang_Zu_PERODUA_Malaysia_Masters_2022_Semifinals"
+  ]
+}
