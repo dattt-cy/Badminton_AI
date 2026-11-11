@@ -25,6 +25,8 @@ from external.TrackNetV3.model import TrackNet
 TRACKNET_WIDTH = 512
 TRACKNET_HEIGHT = 288
 SEQ_LEN = 8
+# Resized TrackNet frames kept per video (~0.44 MB each); a few hit windows' worth.
+RESIZE_CACHE_FRAMES = 256
 
 
 def predict_location(heatmap: np.ndarray) -> tuple[int, int, int, int]:
@@ -43,6 +45,23 @@ def predict_location(heatmap: np.ndarray) -> tuple[int, int, int, int]:
             max_area_idx = i
             max_area = area
     return rects[max_area_idx]
+
+
+def _median_from_stack(stack: torch.Tensor) -> torch.Tensor:
+    """Per-pixel median over the first axis of a uint8 device tensor.
+
+    Equals ``np.median(frames, axis=0).astype(np.uint8)``: numpy averages the two
+    middle values of an even count and the cast truncates, which is
+    floor((a + b) / 2). Sorting on the GPU is about 20x faster than numpy's
+    partition on a 50-frame window.
+    """
+    ordered = stack.sort(dim=0).values
+    count = ordered.shape[0]
+    if count % 2:
+        median = ordered[count // 2]
+    else:
+        median = (ordered[count // 2 - 1].to(torch.int16) + ordered[count // 2].to(torch.int16)) // 2
+    return median.to(torch.uint8)
 
 
 class FastTrackNet:
@@ -135,8 +154,13 @@ class FastTrackNet:
         orig_w: int,
         orig_h: int,
         batch_size: int = 32,
+        resize_cache: Optional[dict[int, np.ndarray]] = None,
     ) -> pd.DataFrame:
-        """Predict shuttle coordinates on a provided sequence of BGR frames."""
+        """Predict shuttle coordinates on a provided sequence of BGR frames.
+
+        ``resize_cache`` maps frame index -> resized RGB frame for one video; pass a fresh
+        dict per video, since frame indices of different videos collide.
+        """
         num_frames = len(bgr_frames)
         if num_frames == 0:
             return pd.DataFrame(columns=["Frame", "Visibility", "X", "Y"])
@@ -144,51 +168,52 @@ class FastTrackNet:
         w_scaler = orig_w / TRACKNET_WIDTH
         h_scaler = orig_h / TRACKNET_HEIGHT
 
-        # Convert to RGB and resize using multi-threaded OpenCV INTER_CUBIC (matches PIL Bicubic within <0.2 px)
-        resized_rgb = [
-            cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), (TRACKNET_WIDTH, TRACKNET_HEIGHT), interpolation=cv2.INTER_CUBIC)
-            for img in bgr_frames
-        ]
-
-        # Background median across frames (shape: 3, H, W)
-        median_img = np.median(resized_rgb, axis=0).astype(np.uint8)
-        median_ch = np.moveaxis(median_img, -1, 0).astype(np.float32)  # (3, H, W)
+        # Convert to RGB and resize using multi-threaded OpenCV INTER_CUBIC (matches PIL Bicubic within <0.2 px).
+        # Neighbouring hit windows overlap, so a per-video cache keyed by frame index skips repeated resizes.
+        resized_rgb = []
+        for img, f_idx in zip(bgr_frames, frame_indices):
+            small = resize_cache.get(f_idx) if resize_cache is not None else None
+            if small is None:
+                small = cv2.resize(
+                    cv2.cvtColor(img, cv2.COLOR_BGR2RGB), (TRACKNET_WIDTH, TRACKNET_HEIGHT),
+                    interpolation=cv2.INTER_CUBIC,
+                )
+                if resize_cache is not None:
+                    resize_cache[f_idx] = small
+            resized_rgb.append(small)
+        if resize_cache is not None:
+            while len(resize_cache) > RESIZE_CACHE_FRAMES:
+                resize_cache.pop(next(iter(resize_cache)))
 
         # Pad frames to a multiple of SEQ_LEN
         remainder = num_frames % self.seq_len
         pad_count = (self.seq_len - remainder) if remainder != 0 else 0
+        padded_indices = list(frame_indices) + [frame_indices[-1]] * pad_count
+        total_sequences = len(padded_indices) // self.seq_len
+        seq_frame_indices = [
+            padded_indices[s * self.seq_len : (s + 1) * self.seq_len] for s in range(total_sequences)
+        ]
 
-        padded_rgb = list(resized_rgb)
-        padded_indices = list(frame_indices)
-        last_frame = resized_rgb[-1]
-        last_idx = frame_indices[-1]
-        for _ in range(pad_count):
-            padded_rgb.append(last_frame)
-            padded_indices.append(last_idx)
-
-        total_sequences = len(padded_rgb) // self.seq_len
-
-        # Assemble sequences of shape (total_sequences, 27, H, W)
-        sequences = []
-        seq_frame_indices = []
-        for s in range(total_sequences):
-            seq_imgs = padded_rgb[s * self.seq_len : (s + 1) * self.seq_len]
-            seq_idxs = padded_indices[s * self.seq_len : (s + 1) * self.seq_len]
-
-            # Stack 8 frames along channel dimension -> (24, H, W)
-            stacked_frames = [np.moveaxis(im, -1, 0).astype(np.float32) for im in seq_imgs]
-            frames_tensor = np.concatenate(stacked_frames, axis=0)  # (24, H, W)
-
-            if self.bg_mode == "concat":
-                full_input = np.concatenate((median_ch, frames_tensor), axis=0)  # (27, H, W)
-            else:
-                full_input = frames_tensor
-
-            full_input /= 255.0
-            sequences.append(full_input)
-            seq_frame_indices.append(seq_idxs)
-
-        sequences = np.stack(sequences, axis=0)  # (N, 27, H, W)
+        # The input tensor is assembled on the GPU from one uint8 upload; building it in
+        # float32 numpy took longer than the model itself. Two details keep the model
+        # output bit-identical to the former numpy path: division by a device tensor
+        # keeps true IEEE division, and the tensor is laid out channels-last (NHWC),
+        # which is the stride pattern the numpy concatenation produced and which
+        # selects the same cuDNN kernels.
+        stack = torch.from_numpy(np.stack(resized_rgb)).to(self.device)  # (T, H, W, 3) uint8
+        median = _median_from_stack(stack)  # (H, W, 3) uint8, background over the real frames
+        if pad_count:
+            stack = torch.cat((stack, stack[-1:].expand(pad_count, -1, -1, -1)), dim=0)
+        height, width = stack.shape[1], stack.shape[2]
+        # (S, 8, H, W, 3) -> (S, H, W, 8, 3) -> (S, H, W, 24): frame-major channel order.
+        frames_t = stack.view(total_sequences, self.seq_len, height, width, 3).permute(0, 2, 3, 1, 4)
+        frames_t = frames_t.reshape(total_sequences, height, width, self.seq_len * 3).float()
+        if self.bg_mode == "concat":
+            median_t = median.float().unsqueeze(0).expand(total_sequences, -1, -1, -1)
+            sequences = torch.cat((median_t, frames_t), dim=3)  # (S, H, W, 27)
+        else:
+            sequences = frames_t
+        sequences = (sequences / torch.tensor(255.0, device=self.device)).permute(0, 3, 1, 2)  # NCHW view
 
         # Inference in batches with AMP FP16
         pred_dict = {"Frame": [], "Visibility": [], "X": [], "Y": []}
@@ -197,7 +222,7 @@ class FastTrackNet:
         with torch.inference_mode():
             for b_start in range(0, total_sequences, batch_size):
                 b_end = min(b_start + batch_size, total_sequences)
-                batch_t = torch.from_numpy(sequences[b_start:b_end]).float().to(self.device)
+                batch_t = sequences[b_start:b_end]
 
                 # Forward pass: output shape (B, 8, H, W) with FP16
                 with torch.autocast(device_type=self.device.type, dtype=torch.float16, enabled=self.device.type == "cuda"):
