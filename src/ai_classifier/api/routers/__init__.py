@@ -1,2 +1,0 @@
-"""Versioned HTTP route modules."""
-
