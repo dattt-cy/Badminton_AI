@@ -455,14 +455,38 @@ def export_coachai_records(
     return records
 
 
-RADAR_AXES = [
-    "Attack Stroke Share",
-    "Defensive Stroke Share",
-    "Net Stroke Share",
-    "Shot Variety",
-    "Mean Model Confidence",
-    "Fast Stroke Share",
-]
+# Style radar: share of a player's strokes (serves excluded) in four disjoint groups,
+# so the axes share one unit (%) and add up to ~100.
+STYLE_GROUPS = {
+    "attack_share": ("smash", "net_attack"),
+    "net_share": ("net_shot",),
+    "defence_share": ("lift", "clear"),
+    "placement_share": ("drive", "drop"),
+}
+RADAR_AXES = list(STYLE_GROUPS)
+# A stroke type counts as "used" when it makes up at least this share of a player's rally strokes.
+USED_STROKE_SHARE = 0.05
+MIN_FLIGHT_SECONDS, MAX_FLIGHT_SECONDS = 0.15, 3.0
+
+
+def style_profile(side_hits: list[dict[str, Any]]) -> dict[str, Any]:
+    """Stroke-group shares (%), stroke types used, and median time between the player's shot and the reply."""
+    rally_strokes = [p.get("stroke") for p in side_hits if p.get("stroke") != "serve"]
+    total = len(rally_strokes)
+    counts = Counter(rally_strokes)
+    shares = {
+        axis: round(100 * sum(counts.get(k, 0) for k in keys) / total) if total else 0
+        for axis, keys in STYLE_GROUPS.items()
+    }
+    flights = sorted(
+        float(f) for p in side_hits
+        if isinstance(p.get("analytics"), dict)
+        and (f := p["analytics"].get("flight_time_to_next_hit_seconds")) is not None
+        and MIN_FLIGHT_SECONDS <= float(f) <= MAX_FLIGHT_SECONDS
+    )
+    tempo = round(flights[len(flights) // 2], 2) if flights else None
+    used = sum(1 for k, n in counts.items() if total and n / total >= USED_STROKE_SHARE)
+    return {"shares": shares, "rally_strokes": total, "stroke_types_used": used, "median_flight_seconds": tempo}
 
 
 def analyze_player_profiles(
@@ -478,6 +502,7 @@ def analyze_player_profiles(
 
     profiles: dict[str, Any] = {}
     radar_values: dict[str, list[int]] = {"upper": [], "lower": []}
+    radar_extra: dict[str, dict[str, Any]] = {}
 
     for side in ["upper", "lower"]:
         player_name = names.get(side, side)
@@ -523,14 +548,17 @@ def analyze_player_profiles(
         r_fast = n_fast / max(1, total_shots)
         pace_score = round(min(100.0, r_fast * 200))
 
-        axes_values = [atk_score, def_score, net_score, variety_score, cons_score, pace_score]
-        radar_values[side] = axes_values
+        style = style_profile(side_hits)
+        shares = style["shares"]
+        radar_values[side] = [shares[axis] for axis in RADAR_AXES]
+        radar_extra[side] = {k: style[k] for k in ("rally_strokes", "stroke_types_used", "median_flight_seconds")}
 
         # Descriptive label derived only from the observed segment.
-        if atk_score == max(atk_score, def_score, net_score):
+        lead = max(("attack_share", "net_share", "defence_share"), key=lambda axis: shares[axis])
+        if lead == "attack_share":
             style_label = "Attack-oriented segment"
             style_desc = f"{player_name} used a comparatively high share of attacking strokes in this analyzed segment."
-        elif net_score == max(atk_score, def_score, net_score):
+        elif lead == "net_share":
             style_label = "Net-oriented segment"
             style_desc = f"{player_name} used a comparatively high share of net strokes in this analyzed segment."
         else:
@@ -605,8 +633,10 @@ def analyze_player_profiles(
         "profiles": profiles,
         "radar_chart": {
             "axes": RADAR_AXES,
+            "unit": "percent_of_rally_strokes",
             "upper": radar_values["upper"],
             "lower": radar_values["lower"],
+            "extra": radar_extra,
         },
         "coachai_balltype_radar": coachai_radar,
     }
@@ -680,54 +710,91 @@ def generate_coach_insights(
     up_name = names.get("upper", "Player Upper")
     low_name = names.get("lower", "Player Lower")
 
-    # 1. Match Dynamics Overview
+    # 1. Match overview. The score is the real one when the broadcast scoreboard was read.
     final_score = scoreboard.get("estimated_score", {})
     leader = final_score.get("leader", "draw")
-    leader_name = up_name if leader == "upper" else (low_name if leader == "lower" else "Tie")
-    score_txt = final_score.get("text", "0 - 0")
-
+    score_txt = final_score.get("text", "0 - 0").replace(" - ", "–")
+    from_scoreboard = final_score.get("is_estimate") is False
+    lead_txt = (
+        f"{up_name} đang dẫn" if leader == "upper"
+        else f"{low_name} đang dẫn" if leader == "lower" else "hai bên đang hòa"
+    )
     insights.append({
-        "category": "Match Dynamic",
+        "category": "Diễn biến trận",
         "target": "General",
-        "insight": f"Estimated score of the current game (game {final_score.get('game_number', 1)} in this video) is {score_txt}, "
-                   f"favoring {leader_name}; this is not an official score. "
-                   f"{up_name} is styled as '{up_prof.get('playstyle', {}).get('label', 'All-Rounder')}', "
-                   f"while {low_name} operates as '{low_prof.get('playstyle', {}).get('label', 'All-Rounder')}'.",
+        "insight": (
+            f"Cuối video, ván {final_score.get('game_number', 1)}: {up_name} {score_txt} {low_name}, {lead_txt} "
+            f"({'đọc từ bảng điểm trên video' if from_scoreboard else 'AI tự đếm, không phải tỉ số chính thức'}). "
+            f"{up_name}: {STYLE_VI.get(up_prof.get('playstyle', {}).get('label'), 'lối đánh cân bằng')}; "
+            f"{low_name}: {STYLE_VI.get(low_prof.get('playstyle', {}).get('label'), 'lối đánh cân bằng')}."
+        ),
     })
 
     # 2-3. The same observational summary for both players.
     for name, prof in ((up_name, up_prof), (low_name, low_prof)):
-        attrs = prof.get("radar_attributes", {})
+        shares = _stroke_group_shares(prof)
         vuln = prof.get("error_analysis", {}).get("most_vulnerable_zone")
-        style = prof.get("playstyle", {}).get("label", "Mixed").replace(" segment", "").lower()
         tip = (
-            f"In this segment, {name}'s detected stroke mix was {style} "
-            f"(attack {attrs.get('attack', 0)}/100, net {attrs.get('net_control', 0)}/100, "
-            f"defence {attrs.get('defense', 0)}/100; shares of detected strokes, not ability)."
+            f"Trong đoạn video này (không tính giao cầu), {shares['attack']}% số cú của {name} là cú tấn công (đập, vồ lưới), "
+            f"{shares['net']}% là cú kéo lưới, {shares['defence']}% là cú phòng thủ (phông, hất cầu). "
+            f"Đây là tỉ lệ loại cú AI nhận ra, không phải điểm năng lực."
         )
         if vuln:
             tip += (
-                f" Their own last hit in estimated lost rallies came most often from "
-                f"{vuln.get('name')} ({vuln.get('losses_incurred')} rallies)."
+                f" Ở các pha thua, cú cuối của {name} thường đánh từ "
+                f"{ZONE_NAMES_VI.get(vuln.get('zone_id'), vuln.get('name'))} ({vuln.get('losses_incurred')} pha)."
             )
         insights.append({
-            "category": "Player Strategy",
+            "category": "Lối đánh",
             "target": name,
             "insight": tip,
         })
 
-    # 4. Key Counter-Tactics from Response Matrix
+    # 4. Key response pattern from the response matrix
     up_responses = response_matrix.get("upper", {})
     if "smash" in up_responses and up_responses["smash"]:
         top_res = up_responses["smash"][0]
         if top_res["count"] >= 5:
             insights.append({
-                "category": "Tactical Response Pattern",
-                "target": f"{low_name} vs {up_name}",
-                "insight": f"In {top_res['count']} observed cases, when receiving a smash from {low_name}, {up_name} responded with '{top_res['response_stroke']}' {top_res['percentage']}% of the time. Treat this as a segment-level pattern, not a general player tendency.",
+                "category": "Cách đỡ đập",
+                "target": up_name,
+                "insight": (
+                    f"Khi bị {low_name} đập, {up_name} đỡ bằng cú "
+                    f"{STROKE_VI.get(top_res['response_stroke'], top_res['response_stroke'])} "
+                    f"{top_res['percentage']:.0f}% số lần ({top_res['count']} lần quan sát trong đoạn video này)."
+                ),
             })
 
     return insights
+
+
+STYLE_VI = {
+    "Attack-oriented segment": "thiên về tấn công",
+    "Net-oriented segment": "thiên về đánh lưới",
+    "Defence-oriented segment": "thiên về phòng thủ",
+}
+ZONE_NAMES_VI = {
+    1: "lưới, cánh trái", 2: "lưới, giữa", 3: "lưới, cánh phải",
+    4: "giữa sân, cánh trái", 5: "giữa sân", 6: "giữa sân, cánh phải",
+    7: "cuối sân, cánh trái", 8: "cuối sân, giữa", 9: "cuối sân, cánh phải",
+}
+STROKE_VI = {
+    "smash": "đập cầu", "drop": "bỏ nhỏ", "clear": "phông cầu", "serve": "giao cầu", "lift": "hất cầu",
+    "drive": "tạt cầu", "net_shot": "kéo lưới", "net_attack": "vồ lưới",
+}
+
+
+def _stroke_group_shares(profile: dict[str, Any]) -> dict[str, int]:
+    """Percent of a player's detected strokes that attack, play net shots, or defend (disjoint groups)."""
+    counts = profile.get("stroke_counts", {}) or {}
+    # Same base as the style radar: rally strokes, serves excluded.
+    total = max(1, sum(n for stroke, n in counts.items() if stroke != "serve"))
+    share = lambda keys: round(100 * sum(counts.get(k, 0) for k in keys) / total)  # noqa: E731
+    return {
+        "attack": share(("smash", "net_attack")),
+        "net": share(("net_shot",)),
+        "defence": share(("lift", "clear")),
+    }
 
 
 def build_match_analysis(
