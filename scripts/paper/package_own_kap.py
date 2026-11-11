@@ -25,6 +25,7 @@ def main() -> None:
     encoder = torch.load(args.encoder, map_location="cpu", weights_only=False)
     payload = {
         "model": kap["model"], "model_type": "cross_v2", "gate_free": True, "rgb_dim": kap["rgb_dim"],
+        "rgb_phases": 3 if kap.get("rgb") == "ownrgb_phases" else 0,
         "court_reference": kap["court_reference"], "rgb_encoder": encoder["model"], "rgb_encoder_epoch": encoder["epoch"],
         "kap_epoch": kap["epoch"], "val_metrics": kap["val_metrics"], "clean_val_metrics": kap["clean_val_metrics"],
         "per_match": kap["per_match"], "base_checkpoint": kap["base_checkpoint"],

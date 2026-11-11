@@ -33,6 +33,7 @@ from finetune_kap_online_pilot import evaluate, load_labeled, match_train, stack
 from ai_classifier.models import SIDE_CLASSES  # noqa: E402
 from train_kap_ablation import KAPAblationModel  # noqa: E402
 from train_kap_bstgap import FEATURES  # noqa: E402
+from train_kap_rgb_phases import SLOTS, KAPRgbPhases  # noqa: E402
 from train_kap_scratch import load_data  # noqa: E402
 
 WORK = REPO_ROOT / "work_dirs"
@@ -41,7 +42,7 @@ CLEAN_KEYS = ("rgb", "pose", "court", "shuttle", "contact_dist", "quality")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--rgb", choices=("default", "ownrgb", "ownrgb_ss22", "ownrgb_x13"), required=True)
+    parser.add_argument("--rgb", choices=("default", "ownrgb", "ownrgb_ss22", "ownrgb_x13", "ownrgb_phases"), required=True)
     parser.add_argument("--own-records", type=Path, default=None,
                         help="Records holding the own-RGB vectors; defaults by --rgb.")
     parser.add_argument("--ss22-matches", type=int, default=5, help="First N ShuttleSet22 train matches, alternating women and men.")
@@ -130,7 +131,8 @@ def main() -> None:
     replay_loader = DataLoader(replay, batch_size=64, shuffle=True, generator=generator)
 
     base = cfg.init_checkpoint or WORK / f"paper_bstgap/rgbcmp_{cfg.rgb}_seed{cfg.base_seed}/kap_best.pth"
-    model = KAPAblationModel(gate="none", rgb_dim=clean["rgb"].shape[1]).to(device)
+    model = (KAPRgbPhases(SLOTS["phases"]) if clean["rgb"].dim() == 3
+             else KAPAblationModel(gate="none", rgb_dim=clean["rgb"].shape[1])).to(device)
     model.load_state_dict(torch.load(base, map_location=device, weights_only=False)["model"])
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.learning_rate, weight_decay=1e-4)
     counts = torch.bincount(online_targets, minlength=8).float().clamp_min(1)
@@ -195,7 +197,7 @@ def main() -> None:
               f"val_f1={metrics['macro_f1']:.4f} clean_f1={clean_metrics['macro_f1']:.4f} side={val_side:.4f} score={current:.4f}", flush=True)
         if current > best:
             best, best_metrics = current, metrics
-            save_atomic({"model": model.state_dict(), "epoch": epoch, "rgb": cfg.rgb, "rgb_dim": clean["rgb"].shape[1],
+            save_atomic({"model": model.state_dict(), "epoch": epoch, "rgb": cfg.rgb, "rgb_dim": clean["rgb"].shape[-1],
                          "base_checkpoint": str(base), "val_metrics": metrics, "clean_val_metrics": clean_metrics,
                          "court_reference": "lines", "per_match": per_match}, out / "best.pth")
         save_atomic({"model": model.state_dict(), "optimizer": optimizer.state_dict(), "generator": generator.get_state(),
