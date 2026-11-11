@@ -192,14 +192,16 @@ def main() -> None:
 
     # Exploratory validation runs aimed at BST (long window, fine-label heads), Match 41 only.
     bst_val = REPO_ROOT / "work_dirs/paper_ablation/bst_val_match41.json"
-    explore = sorted((REPO_ROOT / "work_dirs/paper_bstgap").glob("*_seed*/metrics.json"))
+    # The long-window probes used the earlier R(2+1)D stream; rgbcmp_* are own-RGB comparisons, not probes.
+    explore = [m for m in sorted((REPO_ROOT / "work_dirs/paper_bstgap").glob("*_seed*/metrics.json"))
+               if not m.parent.name.startswith("rgbcmp")]
     if bst_val.exists() and explore:
         bst_val_runs = json.loads(bst_val.read_text(encoding="utf-8"))["results"].values()
         summary["validation_probe"] = {
             "bst_acc": float(np.mean([r["accuracy"] for r in bst_val_runs]) * 100),
             "best_explore_acc": max(json.loads(m.read_text(encoding="utf-8"))["val_stroke"]["accuracy"] for m in explore) * 100,
             "main_val_acc": [json.loads(m.read_text(encoding="utf-8"))["val_stroke"]["accuracy"] * 100
-                             for m in sorted((REPO_ROOT / "work_dirs/paper_main").glob("main_default_seed*/metrics.json"))],
+                             for m in sorted((REPO_ROOT / "work_dirs/paper_mate/runs").glob("main_seed*/metrics.json"))],
         }
 
     out = args.runs / "summary.json"

@@ -45,6 +45,10 @@ FEATURES = {
     # Own RGB network continued on ShuttleSet22 crops.
     "ownrgb_ss22": REPO_ROOT / "work_dirs/paper_ownrgb_ss22/features_w15_30_ownrgb.npz",
     "ownrgb_x13": REPO_ROOT / "work_dirs/paper_ownrgb_ss22/x13/features_w15_30_ownrgb.npz",
+    # MATE (encoder x13, ShuttleSet + 13 ShuttleSet22 matches): [context, before, contact, after], each 224-d.
+    "mate": REPO_ROOT / "work_dirs/paper_rgb_phases/features_rgb_phases.npz",
+    # Same encoder, RGB vectors per contact phase.
+    "ownrgb_phases": REPO_ROOT / "work_dirs/paper_rgb_phases/features_rgb_phases.npz",
 }
 RAW_TYPES = [
     "發短球", "發長球", "長球", "殺球", "點扣", "切球", "過渡切球", "放小球", "擋小球",
