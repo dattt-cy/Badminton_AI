@@ -108,7 +108,7 @@ step "Chạy thử pipeline trên clip 8 giây"
 import os, tempfile, time
 from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(".env")  # an explicit path: find_dotenv() asserts when the code comes from stdin
 import worker
 clip = Path(os.environ["AI_WARMUP_VIDEO"])
 started = time.time()
