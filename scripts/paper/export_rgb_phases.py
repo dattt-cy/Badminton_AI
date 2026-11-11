@@ -20,10 +20,10 @@ import torch
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(REPO_ROOT / "src"), str(REPO_ROOT / "scripts/training"), str(REPO_ROOT / "scripts/paper")]
 
+from ai_classifier.models.own_rgb_encoder import CONTACT_PHASES as PHASES  # noqa: E402
 from train_rgb_scratch import MEAN, STD, RGBEncoder  # noqa: E402
 
 CHUNK = 3200
-PHASES = (slice(0, 6), slice(6, 10), slice(10, 16))
 
 
 def main() -> None:

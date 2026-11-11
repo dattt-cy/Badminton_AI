@@ -393,9 +393,13 @@ class KAPCrossTransV2Model(nn.Module):
         dropout: float = 0.20,
         cross_heads: int = 4,
         gate_free: bool = False,
+        rgb_phases: int = 0,
     ) -> None:
         super().__init__()
         self.hidden_dim = hidden_dim
+        self.rgb_phases = rgb_phases
+        if rgb_phases:
+            self.phase_embedding = nn.Parameter(torch.zeros(1, rgb_phases, hidden_dim))
         self.register_buffer("pose_mean", torch.zeros(pose_dim))
         self.register_buffer("pose_std", torch.ones(pose_dim))
         self.register_buffer("court_mean", torch.zeros(court_dim))
@@ -569,6 +573,19 @@ class KAPCrossTransV2Model(nn.Module):
         # 5. Token Gating & Late Fusion
         cross_gate = torch.sqrt((gates[:, 1] * gates[:, 3]).clamp_min(1e-8))
         token_gates = torch.cat([gates, cross_gate.unsqueeze(1)], dim=1)
+        if self.rgb_phases:
+            # One RGB token per contact phase, all sharing the RGB modality embedding.
+            rgb_tokens = (self.rgb_encoder(rgb) + self.phase_embedding) * token_gates[:, :1].unsqueeze(-1)
+            others = torch.stack([active_pose_token, court_token, shuttle_token, cross_token], dim=1)
+            others = others * token_gates[:, 1:].unsqueeze(-1)
+            embedding = torch.cat(
+                [self.modality_embedding[:, :1],
+                 self.modality_embedding[:, 1:2].expand(-1, self.rgb_phases, -1),
+                 self.modality_embedding[:, 2:]], dim=1,
+            )
+            fusion_token = self.fusion_token.expand(rgb.shape[0], -1, -1)
+            fused = self.output_norm(self.fusion(torch.cat([fusion_token, rgb_tokens, others], dim=1) + embedding)[:, 0])
+            return self.stroke_head(fused), self.side_head(fused), gates
         tokens = torch.stack(
             [
                 self.rgb_encoder(rgb),
