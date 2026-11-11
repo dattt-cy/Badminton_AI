@@ -259,7 +259,7 @@ def main() -> None:
     results: dict = {"rates": list(RATES), "conditions": list(CONDITIONS), "kap": {}, "bst": {}, "gate": {}}
     clean_predictions: dict[str, np.ndarray] = {}
     # Keys evaluated per model: every (condition, rate) plus total shuttle loss.
-    keys = [(c, r) for c in CONDITIONS for r in RATES] + [("shuttle", 1.0)]
+    keys = [(c, r) for c in CONDITIONS for r in RATES] + [("shuttle", 1.0), ("pose", 1.0), ("both", 1.0)]
 
     tensors, kap_ids, kap_truth = kap_inputs(args.features)
     order = np.argsort(kap_ids)

@@ -253,6 +253,42 @@ def build_stroke_analytics(
     }
 
 
+def apply_next_hitter_landing(predictions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Use the opponent's position at the next hit as the landing estimate.
+
+    Measured on five ShuttleSet clips against annotated landing points, the
+    opponent's court position at the return is 1.3 m away at the median, against
+    3.6 m for the shuttle-trajectory proxy. The trajectory value is kept in
+    ``landing_position_court_trajectory_proxy``; the last hit of a rally has no
+    return and keeps it as its landing estimate. Run after rallies and hitters are
+    final. Mutates and returns ``predictions``.
+    """
+    for index, hit in enumerate(predictions):
+        analytics = hit.get("analytics")
+        if not isinstance(analytics, dict):
+            continue
+        analytics.setdefault(
+            "landing_position_court_trajectory_proxy",
+            analytics.get("landing_position_court_proxy"),
+        )
+        analytics["landing_source"] = "shuttle_trajectory"
+        if index + 1 >= len(predictions):
+            continue
+        following = predictions[index + 1]
+        if following.get("rally") != hit.get("rally") or following.get("hitter") == hit.get("hitter"):
+            continue
+        position = (following.get("analytics") or {}).get("player_position_court")
+        if not (isinstance(position, (list, tuple)) and len(position) == 2):
+            continue
+        area = court_area(np.asarray(position, dtype=np.float32))
+        if area is None:
+            continue
+        analytics["landing_position_court_proxy"] = [round(float(position[0]), 5), round(float(position[1]), 5)]
+        analytics["landing_area_3x3_proxy"] = area
+        analytics["landing_source"] = "next_hitter_position"
+    return predictions
+
+
 def predict_rally_boundary(
     prev_prediction: dict[str, Any] | None,
     curr_prediction: dict[str, Any],

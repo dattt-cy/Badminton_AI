@@ -7,6 +7,18 @@ declare a software license when inspected, so no source code is copied here.
 CoachAI+ uses manually annotated 32-zone landing locations. This pipeline has
 monocular 2-D landing proxies, so spatial tactics are explicitly marked as
 proxy-based and use neutral left/right labels instead of forehand/backhand.
+
+Beyond the three CoachAI+ tactics, two stroke-sequence tactics common in
+coaching vocabulary are added (net control, early attack), and Full-Court
+Pressure also counts net kills as attacking shots, like smashes. A player with
+at most two shots in a rally and nothing detected gets ``short_rally``.
+
+Two more come from coaching material and CoachAI+'s shot "exertion" idea:
+absorbing pressure (defend repeated attacks without counter-attacking) and
+running the opponent (make the opponent cover long distances between shots).
+Between two own hits a player moves 1.7 m at the median and 3.5 m at the 90th
+percentile of the stored analyses. Fast flat exchange and tempo change were
+removed: their pipeline agreement stayed at 30-40% (see docs/EXPERIMENT_NOTES.md).
 """
 
 from __future__ import annotations
@@ -24,8 +36,39 @@ TACTIC_LABELS = {
     "front_court_lock": "Front-Court Lock",
     "back_court_lock": "Back-Court Lock",
     "four_corner_clear_drop": "Four-Corner Clear/Drop",
+    "net_control": "Net Control",
+    "early_attack": "Early Attack",
+    "absorb_pressure": "Absorbing Pressure",
+    "run_opponent": "Running the Opponent",
+    "short_rally": "Short Rally",
     "no_tactic": "No Tactic",
 }
+
+# A player with this few shots in a rally has no room for a tactic: label it
+# as a short rally instead of "no tactic".
+SHORT_RALLY_MAX_OWN_SHOTS = 2
+
+NET_STROKES = {"net_shot", "net_attack"}
+NET_CONTROL_STROKES = NET_STROKES | {"drop"}
+ATTACK_STROKES = {"smash", "net_attack"}
+DEFENSIVE_STROKES = {"lift", "clear", "net_shot", "drive"}
+
+# Court size used to turn normalised court positions into metres (singles width).
+COURT_LENGTH_M = 13.4
+COURT_WIDTH_M = 6.1
+LONG_RUN_METRES = 3.0  # ~85th percentile of a player's move between two own hits
+
+# When two tactics end on the same hit, the earlier entry wins: specific patterns
+# (net control) before the general Full-Court Pressure they overlap.
+PRIMARY_PRIORITY = (
+    "defensive_counterattack",
+    "net_control",
+    "full_court_pressure",
+    "four_corner",
+    "absorb_pressure",
+    "run_opponent",
+    "early_attack",
+)
 
 
 def _merge_intervals(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -55,12 +98,38 @@ def _windows(
     )
 
 
+# Key set on a copied hit: where the opponent stood for the next shot.
+NEXT_HITTER_POSITION = "_next_hitter_position"
+
+
 def _landing(hit: dict[str, Any]) -> tuple[float, float] | None:
-    analytics = hit.get("analytics") or {}
-    point = analytics.get("landing_position_court_proxy")
+    """Where the shot went.
+
+    The opponent's position at the next hit is used first: on ShuttleSet clips it is
+    1.3 m from the annotated landing point at the median, against 3.6 m for the
+    shuttle-trajectory landing proxy. The proxy remains the fallback for the last
+    shot of a rally.
+    """
+    point = hit.get(NEXT_HITTER_POSITION)
+    if not (isinstance(point, list) and len(point) == 2):
+        point = (hit.get("analytics") or {}).get("landing_position_court_proxy")
     if not isinstance(point, list) or len(point) != 2:
         return None
     return float(point[0]), float(point[1])
+
+
+def _with_next_hitter_positions(rally_hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Shallow copies of the hits carrying the next hitter's court position."""
+    out = []
+    for index, hit in enumerate(rally_hits):
+        copy = dict(hit)
+        if index + 1 < len(rally_hits):
+            nxt = rally_hits[index + 1]
+            position = (nxt.get("analytics") or {}).get("player_position_court")
+            if nxt.get("hitter") != hit.get("hitter") and isinstance(position, list) and len(position) == 2:
+                copy[NEXT_HITTER_POSITION] = position
+        out.append(copy)
+    return out
 
 
 def _target_zone(hit: dict[str, Any]) -> str | None:
@@ -142,7 +211,7 @@ def _interval_payload(
 
 def _full_court_pressure(player_hits: list[dict[str, Any]]) -> list[tuple[int, int]]:
     scores = [
-        2 if hit.get("stroke") == "smash"
+        2 if hit.get("stroke") in ATTACK_STROKES
         else 1 if hit.get("stroke") in {"drop", "net_shot"}
         else 0
         for hit in player_hits
@@ -171,6 +240,98 @@ def _defensive_counterattack(
             intervals.append((start, index))
             start = None
     return intervals
+
+
+
+
+def _net_control(player_hits: list[dict[str, Any]]) -> list[tuple[int, int]]:
+    """Three consecutive own shots kept short, at least two of them at the net."""
+    strokes = [hit.get("stroke") for hit in player_hits]
+    return _windows(
+        strokes,
+        length=3,
+        predicate=lambda rows: all(stroke in NET_CONTROL_STROKES for stroke in rows)
+        and sum(stroke in NET_STROKES for stroke in rows) >= 2,
+    )
+
+
+def _early_attack(
+    rally_hits: list[dict[str, Any]], player: str
+) -> list[tuple[int, int]]:
+    """Attack on the player's first chance: the serve return, or the third shot after serving.
+
+    Indices refer to the complete rally.
+    """
+    if not rally_hits or rally_hits[0].get("stroke") != "serve":
+        return []
+    first_chance = 2 if rally_hits[0].get("hitter") == player else 1
+    if first_chance >= len(rally_hits):
+        return []
+    hit = rally_hits[first_chance]
+    if hit.get("hitter") != player or hit.get("stroke") not in ATTACK_STROKES:
+        return []
+    return [(0, first_chance)]
+
+
+def _absorb_pressure(
+    rally_hits: list[dict[str, Any]], player: str
+) -> list[tuple[int, int]]:
+    """Three own defensive replies in a row, at least two of them against a smash or net kill.
+
+    Indices refer to the complete rally (from the first attack to the last reply).
+    """
+    own = [index for index, hit in enumerate(rally_hits) if hit.get("hitter") == player and index > 0]
+    intervals = []
+    for k in range(len(own) - 2):
+        window = own[k : k + 3]
+        if not all(rally_hits[i].get("stroke") in DEFENSIVE_STROKES for i in window):
+            continue
+        attacks = sum(rally_hits[i - 1].get("stroke") in ATTACK_STROKES for i in window)
+        if attacks >= 2:
+            intervals.append((window[0] - 1, window[-1]))
+    return _merge_intervals(intervals)
+
+
+
+
+def _position(hit: dict[str, Any]) -> tuple[float, float] | None:
+    point = (hit.get("analytics") or {}).get("player_position_court")
+    if not isinstance(point, list) or len(point) != 2:
+        return None
+    return float(point[0]), float(point[1])
+
+
+def _run_opponent(
+    rally_hits: list[dict[str, Any]], player: str
+) -> list[tuple[int, int]]:
+    """The opponent covers at least 2 x LONG_RUN_METRES over two consecutive runs between own hits.
+
+    Judging the sum, not each run, keeps one under-measured run (position error ~0.7 m)
+    from breaking the pattern.
+
+    Indices refer to the complete rally (opponent's first to last hit of the run).
+    """
+    opponent = [
+        index for index, hit in enumerate(rally_hits)
+        if hit.get("hitter") in ("upper", "lower") and hit.get("hitter") != player
+    ]
+    runs: list[float | None] = []
+    for a, b in zip(opponent, opponent[1:]):
+        start, end = _position(rally_hits[a]), _position(rally_hits[b])
+        if start is None or end is None:
+            runs.append(None)
+            continue
+        runs.append(
+            (((end[0] - start[0]) * COURT_WIDTH_M) ** 2 + ((end[1] - start[1]) * COURT_LENGTH_M) ** 2) ** 0.5
+        )
+    return _merge_intervals(
+        [
+            (opponent[k], opponent[k + 2])
+            for k in range(len(runs) - 1)
+            if runs[k] is not None and runs[k + 1] is not None
+            and runs[k] + runs[k + 1] >= 2 * LONG_RUN_METRES
+        ]
+    )
 
 
 def _spatial_intervals(
@@ -245,6 +406,7 @@ def analyze_coachai_plus_tactics(
     rallies: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for prediction in predictions:
         rallies[int(prediction.get("rally", 1))].append(prediction)
+    rallies = {rally_id: _with_next_hitter_positions(hits) for rally_id, hits in rallies.items()}
 
     records: list[dict[str, Any]] = []
     usage: dict[str, Counter[str]] = {"upper": Counter(), "lower": Counter()}
@@ -329,16 +491,77 @@ def analyze_coachai_plus_tactics(
                     )
                 )
 
+            rally_rule_intervals: dict[str, list[tuple[int, int]]] = {}
+            for tactic, rule, evidence in (
+                ("absorb_pressure", _absorb_pressure, "stroke_sequence_rule"),
+                ("run_opponent", _run_opponent, "player_position_rule"),
+            ):
+                intervals = rule(rally_hits, player)
+                if intervals:
+                    found.append(
+                        {
+                            "type": tactic,
+                            "label": TACTIC_LABELS[tactic],
+                            "intervals": _interval_ranges(rally_hits, intervals),
+                            "evidence_quality": evidence,
+                            "confidence_calibrated": False,
+                            "uses_landing_proxy": False,
+                        }
+                    )
+                    rally_rule_intervals[tactic] = intervals
+
+            net = _net_control(player_hits)
+            if net:
+                found.append(
+                    _interval_payload(
+                        "net_control", net, player_hits,
+                        evidence_quality="stroke_sequence_rule", uses_landing_proxy=False,
+                    )
+                )
+
+            early = _early_attack(rally_hits, player)
+            if early:
+                found.append(
+                    {
+                        "type": "early_attack",
+                        "label": TACTIC_LABELS["early_attack"],
+                        "intervals": _interval_ranges(rally_hits, early),
+                        "evidence_quality": "stroke_sequence_rule",
+                        "confidence_calibrated": False,
+                        "uses_landing_proxy": False,
+                    }
+                )
+
+            # Compare tactics by where they end in the rally; player-hit indices are
+            # mapped to rally indices first.
+            rally_index = [index for index, hit in enumerate(rally_hits) if hit.get("hitter") == player]
+
+            def last_end(intervals: list[tuple[int, int]], own_hits: bool) -> int:
+                if not intervals:
+                    return -1
+                end = max(end for _, end in intervals)
+                return rally_index[end] if own_hits else end
+
+            ends = {
+                "full_court_pressure": last_end(fcp, True),
+                "net_control": last_end(net, True),
+                "four_corner": last_end(four_corner_intervals, True),
+                "early_attack": last_end(early, False),
+                **{tactic: last_end(rows, False) for tactic, rows in rally_rule_intervals.items()},
+            }
             primary = "no_tactic"
             if dc and any(end >= len(rally_hits) - 2 for _, end in dc):
                 primary = "defensive_counterattack"
-            elif fcp or four_corner_intervals:
-                fcp_end = max((end for _, end in fcp), default=-1)
-                corner_end = max((end for _, end in four_corner_intervals), default=-1)
-                primary = "full_court_pressure" if fcp_end >= corner_end else "four_corner"
+            elif any(end >= 0 for end in ends.values()):
+                primary = max(
+                    ends,
+                    key=lambda tactic: (ends[tactic], -PRIMARY_PRIORITY.index(tactic)),
+                )
             elif dc:
                 # CoachAI+ keeps a lone counterattack even when it ends mid-rally.
                 primary = "defensive_counterattack"
+            elif len(player_hits) <= SHORT_RALLY_MAX_OWN_SHOTS:
+                primary = "short_rally"
 
             usage[player][primary] += 1
             records.append(

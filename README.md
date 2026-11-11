@@ -83,17 +83,11 @@ python scripts/evaluation/evaluate_coachai_output.py --help
 python -m pytest -q
 ```
 
-## FastAPI cho frontend
+## Tích hợp với PBL6
 
-API bất đồng bộ theo mô hình job đã được đặt trong `src/ai_classifier/api/`:
-
-```bash
-uv sync --extra api --extra test
-uv run uvicorn ai_classifier.api.main:app --reload
-```
-
-Mở `http://127.0.0.1:8000/docs` để thử API. Xem cấu trúc, contract và ví dụ
-frontend tại [`docs/FASTAPI_ARCHITECTURE.md`](docs/FASTAPI_ARCHITECTURE.md).
+Hệ thống web không gọi HTTP API của repo này. AI worker trong
+`PBL6/backend/integrations/ai-worker/worker.py` nhận job qua RabbitMQ và gọi
+trực tiếp `run_pipeline.analyze_badminton_video()`.
 
 Dataset, video, checkpoint và output lớn được giữ ngoài Git hoặc trong
 `work_dirs/`; không xóa chúng khi dọn source code.

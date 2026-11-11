@@ -10,6 +10,7 @@ Canonical Production Pipeline:
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from pathlib import Path
 
 import cv2
@@ -27,6 +28,7 @@ if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from ai_classifier.localization.fast_tracknet import FastTrackNet
+from ai_classifier.model_cache import cached, file_key
 from ai_classifier.localization.contact_refinement import refine_contact_index
 from ai_classifier.features import modality_quality_vector
 from ai_classifier.features.hitter_crop import padded_square
@@ -109,6 +111,57 @@ def inpaint_shuttle_trajectory(raw_shuttle: np.ndarray, max_gap: int = 6) -> np.
     return arr
 
 
+class SequentialFrameReader:
+    """Serve frame ranges from one VideoCapture with as few seeks as possible.
+
+    Seeking an H.264 stream decodes again from the previous keyframe, which made
+    seeking the largest single cost of a match analysis. Consecutive hits and the
+    TTA windows of one hit overlap, so recently decoded frames are kept and a
+    short forward gap is decoded through instead of seeking.
+    """
+
+    def __init__(self, cap: cv2.VideoCapture, capacity: int = 192, max_forward_gap: int = 90):
+        self.cap = cap
+        self.capacity = capacity
+        self.max_forward_gap = max_forward_gap
+        self.position: int | None = None  # index of the frame the next cap.read() returns
+        self.frames: OrderedDict[int, np.ndarray] = OrderedDict()
+
+    def _move_to(self, frame_index: int) -> None:
+        if self.position == frame_index:
+            return
+        if self.position is not None and self.position < frame_index <= self.position + self.max_forward_gap:
+            while self.position < frame_index:
+                if not self.cap.grab():
+                    break
+                self.position += 1
+            if self.position == frame_index:
+                return
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+        self.position = frame_index
+
+    def read(self, start: int, end: int) -> tuple[list[np.ndarray], list[int]]:
+        """Frames start..end inclusive, stopping at the first frame that cannot be read."""
+        frames, indices = [], []
+        for frame_index in range(start, end + 1):
+            frame = self.frames.get(frame_index)
+            if frame is None:
+                self._move_to(frame_index)
+                ok, frame = self.cap.read()
+                if not ok:
+                    self.position = None
+                    break
+                self.position = frame_index + 1
+                self.frames[frame_index] = frame
+                if len(self.frames) > self.capacity:
+                    self.frames.popitem(last=False)
+            else:
+                self.frames.move_to_end(frame_index)
+            frames.append(frame)
+            indices.append(frame_index)
+        return frames, indices
+
+
 class AlignedVideoPipeline:
     def __init__(
         self,
@@ -129,17 +182,45 @@ class AlignedVideoPipeline:
         corners = corners if corners is not None else COURT_CORNERS_PROFILE["default"]
         self.h_mat = cv2.getPerspectiveTransform(corners, DST_PTS)
 
-        print("[*] Loading FastTrackNet (AMP FP16)...")
-        self.tracker = FastTrackNet(device=DEVICE)
-
-        print(f"[*] Loading YOLOv8-Pose: {pose_model_path}...")
-        self.pose_model = YOLO(str(pose_model_path))
+        # Models are loaded once per process and shared by every video; only the
+        # per-video state below is rebuilt.
+        self.tracker = cached("tracknet", (str(DEVICE),), self._load_tracker)
+        self.pose_model = cached("pose", file_key(pose_model_path), lambda: self._load_pose(pose_model_path))
         # Frame-level caches are populated once for all candidate events in a
         # video.  They intentionally store compact numpy records, not decoded
         # video frames, so a long match does not consume gigabytes of RAM.
         self._pose_cache: dict[int, dict] = {}
         self._shuttle_cache: dict[int, tuple[float, float]] = {}
+        self._tracknet_resize_cache: dict[int, np.ndarray] = {}
+        self._reader: SequentialFrameReader | None = None
 
+        self.clf, self.rgb_model, self.context_window = cached(
+            "kap", file_key(ckpt_path), lambda: self._load_classifier(ckpt_path)
+        )
+        self._event_frames: np.ndarray | None = None
+        if self.context_window:
+            print(f"[*] KAP context window: hit-{self.context_window[0]}..hit+{self.context_window[1]}")
+
+        print("[*] Direct Robust KAP Top-1 enabled.")
+
+    def _read_range(self, cap: cv2.VideoCapture, start: int, end: int) -> tuple[list[np.ndarray], list[int]]:
+        if self._reader is None or self._reader.cap is not cap:
+            self._reader = SequentialFrameReader(cap)
+        return self._reader.read(start, end)
+
+    @staticmethod
+    def _load_tracker() -> FastTrackNet:
+        print("[*] Loading FastTrackNet (AMP FP16)...")
+        return FastTrackNet(device=DEVICE)
+
+    @staticmethod
+    def _load_pose(pose_model_path: str | Path) -> YOLO:
+        print(f"[*] Loading YOLOv8-Pose: {pose_model_path}...")
+        return YOLO(str(pose_model_path))
+
+    @staticmethod
+    def _load_classifier(ckpt_path: str | Path):
+        """Return (KAP classifier, RGB encoder, context window) from a KAP checkpoint."""
         print(f"[*] Loading robust scratch KAP classifier: {ckpt_path}...")
         clf_ckpt = torch.load(ckpt_path, map_location=DEVICE, weights_only=False)
         model_type = clf_ckpt.get("model_type", "baseline")
@@ -151,32 +232,29 @@ class AlignedVideoPipeline:
             model_class = KAPScratchModel
         # Checkpoints built on the team's RGB encoder carry its weights and input size.
         if "rgb_encoder" in clf_ckpt:
-            self.clf = KAPCrossTransV2Model(rgb_dim=clf_ckpt["rgb_dim"], gate_free=clf_ckpt["gate_free"]).to(DEVICE)
-            self.rgb_model = OwnRGBEncoder().to(DEVICE)
-            self.rgb_model.load_state_dict(clf_ckpt["rgb_encoder"])
-            self.rgb_model.eval()
+            rgb_phases = clf_ckpt.get("rgb_phases", 0)
+            clf = KAPCrossTransV2Model(rgb_dim=clf_ckpt["rgb_dim"], gate_free=clf_ckpt["gate_free"], rgb_phases=rgb_phases).to(DEVICE)
+            rgb_model = OwnRGBEncoder(phases=bool(rgb_phases)).to(DEVICE)
+            rgb_model.load_state_dict(clf_ckpt["rgb_encoder"])
+            rgb_model.eval()
             print("[*] RGB branch: team-built encoder from the KAP checkpoint.")
         else:
-            self.clf = model_class().to(DEVICE)
+            clf = model_class().to(DEVICE)
             print("[*] Loading R(2+1)D Visual Backbone...")
-            self.rgb_model = MultiTaskR2Plus1D().to(DEVICE)
+            rgb_model = MultiTaskR2Plus1D().to(DEVICE)
             backbone_ckpt = REPO_ROOT / "src" / "ai_classifier" / "models" / "checkpoints" / "visual_backbone.pth"
             if not backbone_ckpt.exists():
                 backbone_ckpt = REPO_ROOT / "work_dirs" / "r2plus1d18_mixed_shuttleset_finebadminton" / "best.pth"
             rgb_ckpt = torch.load(str(backbone_ckpt), map_location="cpu", weights_only=False)
-            self.rgb_model.load_state_dict(rgb_ckpt["model"], strict=False)
-            self.rgb_model.eval()
-        self.clf.load_state_dict(clf_ckpt["model"])
-        self.clf.eval()
+            rgb_model.load_state_dict(rgb_ckpt["model"], strict=False)
+            rgb_model.eval()
+        clf.load_state_dict(clf_ckpt["model"])
+        clf.eval()
         # Checkpoints trained on BST's longer between-hit context store their
         # (before, after) window; older checkpoints keep the 15/30 extract_features window.
         window = clf_ckpt.get("context_window")
-        self.context_window = tuple(int(v) for v in window) if window else None
-        self._event_frames: np.ndarray | None = None
-        if self.context_window:
-            print(f"[*] KAP context window: hit-{self.context_window[0]}..hit+{self.context_window[1]}")
-
-        print("[*] Direct Robust KAP Top-1 enabled.")
+        context_window = tuple(int(v) for v in window) if window else None
+        return clf, rgb_model, context_window
 
     def _decode_pose_result(self, res) -> dict:
         """Convert an Ultralytics result into a compact, hitter-neutral record."""
@@ -280,14 +358,7 @@ class AlignedVideoPipeline:
             chunk_start = region_start
             while chunk_start <= region_end:
                 chunk_end = min(region_end, chunk_start + chunk_frames - 1)
-                cap.set(cv2.CAP_PROP_POS_FRAMES, chunk_start)
-                frames, indices = [], []
-                for frame_index in range(chunk_start, chunk_end + 1):
-                    ok, frame = cap.read()
-                    if not ok:
-                        break
-                    frames.append(frame)
-                    indices.append(frame_index)
+                frames, indices = self._read_range(cap, chunk_start, chunk_end)
                 if not frames:
                     break
 
@@ -379,13 +450,7 @@ class AlignedVideoPipeline:
         start_f = max(0, hf_clip - decode_before - refine_radius)
         end_f = min(total_frames - 1, hf_clip + decode_after + refine_radius)
 
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
-        frames_bgr, frame_indices = [], []
-        for f in range(start_f, end_f + 1):
-            ok, frame = cap.read()
-            if not ok: break
-            frames_bgr.append(frame)
-            frame_indices.append(f)
+        frames_bgr, frame_indices = self._read_range(cap, start_f, end_f)
 
         if len(frames_bgr) < 20:
             return None
@@ -395,7 +460,8 @@ class AlignedVideoPipeline:
             coord_map = {frame: self._shuttle_cache[frame] for frame in frame_indices}
         else:
             track_df = self.tracker.predict_frames(
-                frames_bgr, frame_indices, self.orig_w, self.orig_h, batch_size=32
+                frames_bgr, frame_indices, self.orig_w, self.orig_h, batch_size=32,
+                resize_cache=self._tracknet_resize_cache,
             )
             coord_map = {
                 int(row["Frame"]): (float(row["X"]) / self.orig_w, float(row["Y"]) / self.orig_h)
@@ -554,12 +620,8 @@ class AlignedVideoPipeline:
         wanted = [int(f) for f in np.rint(np.linspace(first, last, 16)).astype(np.int64)]
         missing = [f for f in wanted if f not in decoded]
         if missing:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, missing[0])
-            for f in range(missing[0], missing[-1] + 1):
-                ok, frame = cap.read()
-                if not ok:
-                    break
-                decoded[f] = frame
+            frames, indices = self._read_range(cap, missing[0], missing[-1])
+            decoded.update(zip(indices, frames))
         available = sorted(decoded)
         x1, y1, x2, y2 = crop_box
         rgb_16 = [
