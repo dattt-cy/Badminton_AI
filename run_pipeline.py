@@ -806,7 +806,14 @@ def analyze_badminton_video(
             while start is not None:
                 run_pass(start)
                 poll_focus()
-                start = next_pass_start()
+                following = next_pass_start()
+                if following == start:
+                    # The container claimed more frames than the decoder can read (common in cut or
+                    # downloaded files), so this pass scored nothing and the next would repeat it forever.
+                    print(f"  [pass] no frames decodable after {start / fps:.1f}s; treating it as the end")
+                    close_clusters(mark_scanned(start, last_centre))
+                    break
+                start = following
         else:
             # Two hit detectors scanned at the same window centres; each window keeps the higher
             # score. The production detector is strongest on 2018-2021 broadcasts, the
