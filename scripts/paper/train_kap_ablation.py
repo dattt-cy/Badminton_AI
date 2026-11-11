@@ -52,11 +52,23 @@ class KAPAblationModel(KAPCrossTransV2Model):
     def __init__(
         self, gate: str = "sigmoid", pooling: str = "three", use_cross: bool = True,
         use_hitter: bool = True, use_rgb: bool = True, rgb_dim: int = 512,
+        rgb_slots: list[int] | None = None, use_pose: bool = True, use_shuttle: bool = True,
+        use_contact: bool = True,
     ):
         super().__init__(rgb_dim=rgb_dim)
+        if not use_contact and pooling == "three":
+            raise ValueError("removing the contact encoding needs mean pooling, phases are cut by contact distance")
+        # Cross-attention needs pose and shuttle; hitter weights mix the two players' pose.
+        use_cross = use_cross and use_pose and use_shuttle
+        use_hitter = use_hitter and use_pose
         self.gate_mode, self.pooling = gate, pooling
         self.use_cross, self.use_hitter, self.use_rgb = use_cross, use_hitter, use_rgb
+        self.use_pose, self.use_shuttle, self.use_contact = use_pose, use_shuttle, use_contact
         hidden = self.hidden_dim
+        # Positions of the per-phase vectors in a (N, slots, dim) RGB input; None uses one token.
+        self.rgb_slots = rgb_slots
+        if rgb_slots:
+            self.phase_embedding = nn.Parameter(torch.zeros(1, len(rgb_slots), hidden))
         if gate == "none":
             self.quality_gate = None
         elif gate == "softmax":
@@ -77,11 +89,15 @@ class KAPAblationModel(KAPCrossTransV2Model):
                 encoder.phase_proj[0] = nn.Linear(hidden, hidden)
             if use_cross:
                 self.cross_phase_proj[0] = nn.Linear(hidden, hidden)
+        if not use_pose:
+            self.pose_encoder = None
+        if not use_shuttle:
+            self.shuttle_encoder = None
 
     def _encode(self, encoder, sequence, contact):
         if self.pooling == "three":
             return encoder(sequence, contact)
-        projected = encoder.input_proj(sequence) + encoder.contact_proj(contact)
+        projected = encoder.input_proj(sequence) + encoder.contact_proj(contact if self.use_contact else contact * 0)
         temporal = encoder.temporal(projected.transpose(1, 2)).transpose(1, 2)
         encoded = F.gelu(projected + temporal)
         return encoded, encoder.phase_proj(encoded.mean(dim=1))
@@ -97,10 +113,14 @@ class KAPAblationModel(KAPCrossTransV2Model):
         shuttle_n = self._normalize(shuttle, self.shuttle_mean, self.shuttle_std)
         quality_n = self._normalize(quality, self.quality_mean, self.quality_std)
 
-        seq_p1, tok_p1 = self._encode(self.pose_encoder, pose_n[:, :, :34], contact_distance)
-        seq_p2, tok_p2 = self._encode(self.pose_encoder, pose_n[:, :, 34:], contact_distance)
+        if self.use_pose:
+            seq_p1, tok_p1 = self._encode(self.pose_encoder, pose_n[:, :, :34], contact_distance)
+            seq_p2, tok_p2 = self._encode(self.pose_encoder, pose_n[:, :, 34:], contact_distance)
         _, court_token = self._encode(self.court_encoder, court_n, contact_distance)
-        shuttle_sequence, shuttle_token = self._encode(self.shuttle_encoder, shuttle_n, contact_distance)
+        if self.use_shuttle:
+            shuttle_sequence, shuttle_token = self._encode(self.shuttle_encoder, shuttle_n, contact_distance)
+        else:
+            shuttle_token = torch.zeros_like(court_token)  # Hitter weights keep their input size.
 
         if self.use_hitter:
             hitter_weights = F.softmax(
@@ -110,7 +130,6 @@ class KAPAblationModel(KAPCrossTransV2Model):
             hitter_weights = torch.full((pose.shape[0], 2), 0.5, device=pose.device)
         w1 = hitter_weights[:, 0:1].unsqueeze(1)
         w2 = hitter_weights[:, 1:2].unsqueeze(1)
-        active_pose_token = hitter_weights[:, 0:1] * tok_p1 + hitter_weights[:, 1:2] * tok_p2
 
         if self.gate_mode == "none":
             gates = torch.ones(pose.shape[0], 4, device=pose.device)
@@ -119,10 +138,18 @@ class KAPAblationModel(KAPCrossTransV2Model):
             if self.gate_mode == "softmax":
                 gates = gates.softmax(dim=1) * 4
 
-        tokens = {POSE: active_pose_token, COURT: court_token, SHUTTLE: shuttle_token}
+        tokens = {COURT: court_token}
         token_gates = {POSE: gates[:, 1], COURT: gates[:, 2], SHUTTLE: gates[:, 3]}
+        if self.use_pose:
+            tokens[POSE] = hitter_weights[:, 0:1] * tok_p1 + hitter_weights[:, 1:2] * tok_p2
+        if self.use_shuttle:
+            tokens[SHUTTLE] = shuttle_token
         if self.use_rgb:
-            tokens[RGB], token_gates[RGB] = self.rgb_encoder(rgb), gates[:, 0]
+            if self.rgb_slots:
+                tokens[RGB] = self.rgb_encoder(rgb[:, self.rgb_slots]) + self.phase_embedding
+            else:
+                tokens[RGB] = self.rgb_encoder(rgb[:, 0] if rgb.dim() == 3 else rgb)
+            token_gates[RGB] = gates[:, 0]
         if self.use_cross:
             shuttle_kv = self.cross_key_value_norm(shuttle_sequence)
             cross_p1, _ = self.p1_to_shuttle(self.cross_query_norm1(seq_p1), shuttle_kv, shuttle_kv, need_weights=False)
@@ -135,9 +162,10 @@ class KAPAblationModel(KAPCrossTransV2Model):
             token_gates[CROSS] = torch.sqrt((gates[:, 1] * gates[:, 3]).clamp_min(1e-8))
 
         order = sorted(tokens)
-        stacked = torch.stack([tokens[i] for i in order], dim=1)
-        stacked = stacked * torch.stack([token_gates[i] for i in order], dim=1).unsqueeze(-1)
-        embedding = self.modality_embedding[:, [FUSION, *order]]
+        columns = [tokens[i] if tokens[i].dim() == 3 else tokens[i].unsqueeze(1) for i in order]
+        stacked = torch.cat([c * token_gates[i].view(-1, 1, 1) for c, i in zip(columns, order)], dim=1)
+        slots = [i for c, i in zip(columns, order) for _ in range(c.shape[1])]
+        embedding = self.modality_embedding[:, [FUSION, *slots]]
         fusion_token = self.fusion_token.expand(stacked.shape[0], -1, -1)
         fused = self.output_norm(self.fusion(torch.cat([fusion_token, stacked], dim=1) + embedding)[:, 0])
         return self.stroke_head(fused), self.side_head(fused), gates

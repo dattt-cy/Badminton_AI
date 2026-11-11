@@ -14,6 +14,8 @@ from typing import Any
 
 import cv2
 
+from ai_classifier.model_cache import cached
+
 
 Score = tuple[int, int]
 
@@ -26,6 +28,17 @@ def calibrate_bwf_scoreboard_roi(height: int, width: int) -> tuple[int, int, int
         int(round(410 * width / 1280)),
         int(round(442 * width / 1280)),
     )
+
+
+def crop_score_roi(frame: Any, roi: tuple[int, int, int, int]) -> Any:
+    """The ROI pixels :func:`read_score_from_frame` reads, clamped to the frame the same way."""
+    y1, y2, x1, x2 = roi
+    height, width = frame.shape[:2]
+    y1, y2 = max(0, y1), min(height, y2)
+    x1, x2 = max(0, x1), min(width, x2)
+    if y1 >= y2 or x1 >= x2:
+        return frame[0:0, 0:0].copy()
+    return frame[y1:y2, x1:x2].copy()
 
 
 def read_score_from_frame(
@@ -118,8 +131,13 @@ def extract_score_events(
     *,
     sample_interval_frames: int = 25,
     confirmations_required: int = 2,
+    roi_crops: dict[int, Any] | None = None,
 ) -> dict[str, Any]:
-    """Scan a video ROI and return confirmed score changes."""
+    """Scan a video ROI and return confirmed score changes.
+
+    ``roi_crops`` maps sampled frame indices to ROI crops already taken from a
+    sequential decode (see :func:`crop_score_roi`); the video is then not seeked.
+    """
     try:
         import easyocr
         import torch
@@ -132,16 +150,23 @@ def extract_score_events(
     fps = float(capture.get(cv2.CAP_PROP_FPS)) or 30.0
     total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
     # EasyOCR's Unicode progress bar can fail on Windows cp1258 consoles.
-    reader = easyocr.Reader(["en"], gpu=torch.cuda.is_available(), verbose=False)
+    gpu = torch.cuda.is_available()
+    reader = cached("easyocr", ("en", gpu), lambda: easyocr.Reader(["en"], gpu=gpu, verbose=False))
     tracker = ScoreChangeTracker(confirmations_required=confirmations_required)
     reads = 0
     try:
         for frame_index in range(0, total_frames, max(1, sample_interval_frames)):
-            capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-            success, frame = capture.read()
-            if not success or frame is None:
-                continue
-            score = read_score_from_frame(frame, roi, reader)
+            if roi_crops is not None:
+                crop = roi_crops.get(frame_index)
+                if crop is None:
+                    continue
+                score = read_score_from_frame(crop, (0, crop.shape[0], 0, crop.shape[1]), reader)
+            else:
+                capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+                success, frame = capture.read()
+                if not success or frame is None:
+                    continue
+                score = read_score_from_frame(frame, roi, reader)
             reads += score is not None
             tracker.observe(score, frame_index, fps)
     finally:

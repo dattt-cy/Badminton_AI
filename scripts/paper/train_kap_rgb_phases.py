@@ -1,8 +1,8 @@
 """Train KAP with the own-RGB stream split by contact phase, on the clean features (resumable).
 
-``--tokens phases`` uses three RGB tokens (before, contact, after); ``--tokens context_phases``
-also keeps the whole-clip vector. Training follows scripts/paper/train_kap_bstgap.py, and the
-result is compared with that script's single-token KAP on the same seed.
+``--tokens phases`` uses three RGB tokens (before, contact, after). Training follows
+scripts/paper/train_kap_bstgap.py, and the result is compared with that script's
+single-token KAP on the same seed.
 
     python scripts/paper/train_kap_rgb_phases.py --tokens phases --seed 1
 """
@@ -29,7 +29,7 @@ from train_kap_scratch import (  # noqa: E402
     VideoDomainAugmentor, balanced_weights, feature_statistics, load_data, seed_everything, symmetric_consistency,
 )
 
-SLOTS = {"phases": [1, 2, 3], "context_phases": [0, 1, 2, 3]}
+SLOTS = {"phases": [1, 2, 3]}
 NAMES = ("rgb", "pose", "court", "shuttle", "contact_dist", "quality")
 
 

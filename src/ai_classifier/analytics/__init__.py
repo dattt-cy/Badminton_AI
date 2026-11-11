@@ -1,4 +1,5 @@
 from .stroke import (
+    apply_next_hitter_landing,
     assign_rallies,
     build_stroke_analytics,
     prune_trailing_phantom_hits,
@@ -15,9 +16,10 @@ from .match_analysis import (
 )
 from .tactics import analyze_coachai_plus_tactics
 from .movement import analyze_sparse_movement
-from .scoreboard import ScoreChangeTracker, calibrate_bwf_scoreboard_roi, extract_score_events
+from .scoreboard import ScoreChangeTracker, calibrate_bwf_scoreboard_roi, crop_score_roi, extract_score_events
 
 __all__ = [
+    "apply_next_hitter_landing",
     "assign_rallies",
     "build_stroke_analytics",
     "prune_trailing_phantom_hits",
@@ -35,5 +37,6 @@ __all__ = [
     "analyze_sparse_movement",
     "ScoreChangeTracker",
     "calibrate_bwf_scoreboard_roi",
+    "crop_score_roi",
     "extract_score_events",
 ]

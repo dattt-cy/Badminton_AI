@@ -17,9 +17,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import queue
 import sys
+import threading
 from collections import deque
 from pathlib import Path
+from typing import Callable
 
 import cv2
 import numpy as np
@@ -42,6 +45,10 @@ CLASSES = ["no_hit", "upper_hit", "lower_hit"]
 
 _MEAN = torch.tensor([0.43216, 0.394666, 0.37645])
 _STD = torch.tensor([0.22803, 0.22145, 0.216989])
+# Prepared batches the decode thread may run ahead of the GPU (8 clips ≈ 6 MB each).
+SCAN_PREFETCH_BATCHES = 6
+# Decoded frames the decode thread may run ahead of preparation (720p ≈ 2.8 MB each).
+SCAN_PREFETCH_FRAMES = 32
 
 
 # ---------------------------------------------------------------------------
@@ -86,16 +93,35 @@ def load_model(checkpoint_path: Path) -> tuple[nn.Module, dict]:
 # Frame decoding helpers
 # ---------------------------------------------------------------------------
 
-def _preprocess_frames(frames: list[np.ndarray], n_frames: int) -> torch.Tensor:
-    """Convert a list of RGB uint8 128x171x3 frames into a C,T,H,W float tensor 112x112."""
-    while len(frames) < n_frames:
-        frames.append(frames[-1])
-    arr = np.stack(frames[:n_frames])          # T,H,W,C uint8 (16, 128, 171, 3)
-    crop = arr[:, 8:120, 30:142, :]            # Center crop (16, 112, 112, 3)
-    tensor = torch.from_numpy(crop).permute(3, 0, 1, 2).float().div_(255.0)  # C,T,H,W
-    mean = _MEAN.view(3, 1, 1, 1)
-    std = _STD.view(3, 1, 1, 1)
-    return (tensor - mean) / std
+def _preprocess_frame(frame_rgb: np.ndarray) -> torch.Tensor:
+    """Normalise one RGB uint8 128x171x3 frame into a C,H,W float tensor 112x112.
+
+    Every step is element-wise, so a clip stacked from these frames equals a clip
+    normalised as a whole; with stride 4 each frame is now normalised once instead
+    of four times.
+    """
+    crop = frame_rgb[8:120, 30:142, :]  # Center crop (112, 112, 3)
+    tensor = torch.from_numpy(crop).permute(2, 0, 1).float().div_(255.0)  # C,H,W
+    return (tensor - _MEAN.view(3, 1, 1)) / _STD.view(3, 1, 1)
+
+
+def _put_unless_stopped(target: queue.Queue, item, stop: threading.Event) -> bool:
+    while not stop.is_set():
+        try:
+            target.put(item, timeout=0.5)
+            return True
+        except queue.Full:
+            continue
+    return False
+
+
+def _get_unless_stopped(source: queue.Queue, stop: threading.Event):
+    while not stop.is_set():
+        try:
+            return source.get(timeout=0.5)
+        except queue.Empty:
+            continue
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +141,8 @@ def scan_video(
     start_frame: int = 0,
     gate_path: Path | None = None,
     gate_padding: int = 30,
+    frame_callback: Callable[[int, np.ndarray], None] | None = None,
+    on_scored: Callable[[list[HitEvent], int], bool | None] | None = None,
 ) -> list[HitEvent]:
     """Produce one HitEvent per stride-th frame across the entire video.
 
@@ -131,6 +159,9 @@ def scan_video(
         use_amp: Whether to use float16 autocast.
         max_frames: If set, stop after this many frames (for debugging).
         start_frame: Skip this many frames at the beginning.
+        on_scored: Called after every scored batch with all events so far (in frame
+            order; the list keeps growing) and the latest scored centre frame. Returning
+            True stops the scan there.
     """
     half = n_frames // 2
     cap = cv2.VideoCapture(str(video_path))
@@ -156,59 +187,121 @@ def scan_video(
 
     model.eval()
     events: list[HitEvent] = []
-    frame_buffer: deque[np.ndarray] = deque(maxlen=n_frames)
-    pending_clips: list[torch.Tensor] = []
-    pending_centers: list[int] = []
     first_center = start_frame + half
-    expected_evals = max(0, (effective_max - half - first_center + stride - 1) // stride)
 
-    def flush_batch() -> None:
-        if not pending_clips:
-            return
-        batch_tensor = torch.stack(pending_clips).to(device)  # B,C,T,H,W
-        with torch.inference_mode():
-            with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=use_amp):
-                logits = model(batch_tensor)
-            probs = F.softmax(logits.float(), dim=-1).cpu().numpy()
-        for center, prob in zip(pending_centers, probs):
-            upper = float(prob[1])
-            lower = float(prob[2])
-            hit_score = upper + lower
-            side = "upper" if upper >= lower else "lower"
-            events.append(HitEvent(frame=center, side=side, score=hit_score))
-        pending_clips.clear()
-        pending_centers.clear()
+    # Three stages overlap: a decode thread, a preparation thread (resize, normalise,
+    # batch) and the GPU on this thread. OpenCV and torch release the GIL, so decoding
+    # becomes the only bound. Batches are formed exactly as in a single-threaded loop,
+    # so scores are unchanged.
+    decoded: queue.Queue = queue.Queue(maxsize=SCAN_PREFETCH_FRAMES)
+    batches: queue.Queue = queue.Queue(maxsize=SCAN_PREFETCH_BATCHES)
+    stop = threading.Event()
+    done = object()
 
-    # Decode once from left to right with single-pass resize
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-    frame_index = start_frame
-    while frame_index < effective_max:
-        ok, frame = cap.read()
-        if not ok:
-            break
-        frame_small = cv2.resize(frame, (171, 128), interpolation=cv2.INTER_LINEAR)
-        frame_buffer.append(cv2.cvtColor(frame_small, cv2.COLOR_BGR2RGB))
-        if len(frame_buffer) == n_frames:
-            window_start = frame_index - n_frames + 1
-            center = window_start + half
-            if (
-                center >= first_center
-                and center < effective_max - half
-                and (center - first_center) % stride == 0
-            ):
-                if gate_segments is None or frame_is_live(center, gate_segments, padding=gate_padding):
-                    pending_clips.append(_preprocess_frames(list(frame_buffer), n_frames))
-                    pending_centers.append(center)
-                    if len(pending_clips) >= batch_size:
-                        flush_batch()
-                        if len(events) % 1000 < batch_size:
-                            print(
-                                f"  [scan-progress] scored={len(events)} centers",
-                                flush=True,
-                            )
-        frame_index += 1
-    flush_batch()
-    cap.release()
+    def decode() -> None:
+        try:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            frame_index = start_frame
+            while frame_index < effective_max and not stop.is_set():
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                if frame_callback is not None:
+                    # Lets later stages reuse this single sequential decode instead of seeking.
+                    frame_callback(frame_index, frame)
+                if not _put_unless_stopped(decoded, (frame_index, frame), stop):
+                    return
+                frame_index += 1
+        except BaseException as exc:  # surfaced in the consumer thread
+            _put_unless_stopped(decoded, exc, stop)
+        finally:
+            _put_unless_stopped(decoded, done, stop)
+
+    def prepare() -> None:
+        frame_buffer: deque[torch.Tensor] = deque(maxlen=n_frames)
+        pending_clips: list[torch.Tensor] = []
+        pending_centers: list[int] = []
+        try:
+            while True:
+                item = _get_unless_stopped(decoded, stop)
+                if item is None or item is done:
+                    break
+                if isinstance(item, BaseException):
+                    raise item
+                frame_index, frame = item
+                frame_small = cv2.resize(frame, (171, 128), interpolation=cv2.INTER_LINEAR)
+                frame_buffer.append(_preprocess_frame(cv2.cvtColor(frame_small, cv2.COLOR_BGR2RGB)))
+                if len(frame_buffer) == n_frames:
+                    window_start = frame_index - n_frames + 1
+                    center = window_start + half
+                    if (
+                        center >= first_center
+                        and center < effective_max - half
+                        and (center - first_center) % stride == 0
+                        and (gate_segments is None or frame_is_live(center, gate_segments, padding=gate_padding))
+                    ):
+                        pending_clips.append(torch.stack(list(frame_buffer), dim=1))  # C,T,H,W
+                        pending_centers.append(center)
+                        if len(pending_clips) >= batch_size:
+                            if not _put_unless_stopped(batches, (torch.stack(pending_clips), list(pending_centers)), stop):
+                                return
+                            pending_clips.clear()
+                            pending_centers.clear()
+            if pending_clips:
+                _put_unless_stopped(batches, (torch.stack(pending_clips), list(pending_centers)), stop)
+        except BaseException as exc:  # surfaced in the consumer thread
+            _put_unless_stopped(batches, exc, stop)
+        finally:
+            _put_unless_stopped(batches, done, stop)
+
+    workers = [
+        threading.Thread(target=decode, name="scan-decode", daemon=True),
+        threading.Thread(target=prepare, name="scan-prepare", daemon=True),
+    ]
+    # Torch's intra-op pool split every small per-frame op across all cores and fought
+    # FFmpeg's decode threads (58.6 s -> 45.6 s on a 10-min clip with one thread).
+    # The ops here are element-wise, so the thread count does not change any value.
+    torch_threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    for worker in workers:
+        worker.start()
+    try:
+        while True:
+            item = batches.get()
+            if item is done:
+                break
+            if isinstance(item, BaseException):
+                raise item
+            batch_cpu, centers = item
+            batch_tensor = batch_cpu.to(device)  # B,C,T,H,W
+            with torch.inference_mode():
+                with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=use_amp):
+                    logits = model(batch_tensor)
+                probs = F.softmax(logits.float(), dim=-1).cpu().numpy()
+            for center, prob in zip(centers, probs):
+                upper = float(prob[1])
+                lower = float(prob[2])
+                hit_score = upper + lower
+                side = "upper" if upper >= lower else "lower"
+                events.append(HitEvent(frame=center, side=side, score=hit_score))
+            if len(events) % 1000 < len(centers):
+                print(f"  [scan-progress] scored={len(events)} centers", flush=True)
+            if on_scored is not None:
+                # The callback may run heavy work (stroke classification); it gets the
+                # normal torch thread pool so its results match a run after the scan.
+                torch.set_num_threads(torch_threads)
+                try:
+                    stop_requested = bool(on_scored(events, centers[-1]))
+                finally:
+                    torch.set_num_threads(1)
+                if stop_requested:
+                    break  # after a complete batch, so a later pass resumes on the batch grid
+    finally:
+        stop.set()
+        for worker in workers:
+            worker.join()
+        torch.set_num_threads(torch_threads)
+        cap.release()
     return events
 
 

@@ -7,6 +7,7 @@ checkpoint against ShuttleSet labels, and NMS / rescue post-processing.
 """
 
 import csv
+import os
 from pathlib import Path
 
 import cv2
@@ -36,7 +37,8 @@ HIT_CHECKPOINT = REPO_ROOT / "src" / "ai_classifier" / "models" / "checkpoints" 
 CLIP_VIDEO = REPO_ROOT / "work_dirs" / "eval_clips" / "clip1_match44_10min.mp4"
 MANIFEST = REPO_ROOT / "data" / "manifests" / "shuttleset_rgb.csv"
 CLIP_MATCH_ID, CLIP_RAW_START = 44, 45000
-SCAN_FRAMES = 18000  # the whole 10-minute clip
+# The whole 10-minute clip; UT_SCAN_FRAMES scans only its start (e.g. 1800 = 1 minute) for a quick demo.
+SCAN_FRAMES = int(os.environ.get("UT_SCAN_FRAMES", 18000))
 TOLERANCE = 12
 
 

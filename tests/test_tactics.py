@@ -146,9 +146,9 @@ def test_build_tactical_analytics_full_pipeline():
     # Radar chart validation
     radar = report["radar_chart"]
     assert "axes" in radar
-    assert len(radar["axes"]) == 6
-    assert len(radar["upper"]) == 6
-    assert len(radar["lower"]) == 6
+    assert radar["axes"] == ["attack_share", "net_share", "defence_share", "placement_share"]
+    assert len(radar["upper"]) == 4
+    assert len(radar["lower"]) == 4
     assert all(0 <= val <= 100 for val in radar["upper"])
     assert all(0 <= val <= 100 for val in radar["lower"])
 
@@ -186,16 +186,29 @@ def test_coach_insights_describe_both_players_the_same_way():
     from ai_classifier.analytics.match_analysis import generate_coach_insights
 
     profile = {
-        "radar_attributes": {"attack": 80, "net_control": 40, "defense": 30},
+        "stroke_counts": {"smash": 4, "net_shot": 2, "lift": 2, "clear": 2},
+        "total_shots": 10,
         "playstyle": {"label": "Attack-oriented segment"},
-        "error_analysis": {"most_vulnerable_zone": None},
+        "error_analysis": {"most_vulnerable_zone": {"zone_id": 8, "losses_incurred": 2}},
     }
     profiles = {"profiles": {"upper": dict(profile), "lower": dict(profile)}}
     scoreboard = {"estimated_score": {"text": "0 - 0", "leader": "draw"}}
     rows = [r for r in generate_coach_insights(profiles, {}, scoreboard, {"upper": "A", "lower": "B"})
-            if r["category"] == "Player Strategy"]
+            if r["category"] == "Lối đánh"]
     assert len(rows) == 2
-    assert rows[0]["insight"].replace("A's", "X's") == rows[1]["insight"].replace("B's", "X's")
+    assert rows[0]["insight"].replace(" A ", " X ").replace(" A.", " X.") == rows[1]["insight"].replace(" B ", " X ").replace(" B.", " X.")
+    assert "40% số cú" in rows[0]["insight"] and "cuối sân, giữa (2 pha)" in rows[0]["insight"]
+
+
+def test_match_insight_says_where_the_score_comes_from():
+    from ai_classifier.analytics.match_analysis import generate_coach_insights
+
+    profiles = {"profiles": {"upper": {}, "lower": {}}}
+    read = {"estimated_score": {"text": "11 - 6", "leader": "upper", "is_estimate": False, "game_number": 1}}
+    counted = {"estimated_score": {"text": "11 - 6", "leader": "upper", "is_estimate": True, "game_number": 1}}
+    names = {"upper": "A", "lower": "B"}
+    assert "đọc từ bảng điểm" in generate_coach_insights(profiles, {}, read, names)[0]["insight"]
+    assert "AI tự đếm" in generate_coach_insights(profiles, {}, counted, names)[0]["insight"]
 
 
 def test_coach_insight_suppresses_tiny_response_samples():
@@ -211,7 +224,7 @@ def test_coach_insight_suppresses_tiny_response_samples():
     }
     scoreboard = {"estimated_score": {"text": "0 - 0", "leader": "draw"}}
     insights = generate_coach_insights(profiles, matrix, scoreboard)
-    assert all(row["category"] != "Tactical Response Pattern" for row in insights)
+    assert all(row["category"] != "Cách đỡ đập" for row in insights)
 
 
 def test_stroke_analytics_builds_landing_proxy_and_speeds() -> None:
@@ -426,7 +439,7 @@ def test_attach_tactic_outcomes_ignores_uncounted_rallies():
     ]
     scoreboard = {"rallies": [{"rally_id": 1, "winner": "upper", "included_in_estimated_score": False}]}
     result = attach_tactic_outcomes(analyze_coachai_plus_tactics(predictions), scoreboard)
-    stats = result["effectiveness_by_player"]["upper"]["no_tactic"]
+    stats = result["effectiveness_by_player"]["upper"]["short_rally"]
     assert stats["decided_rallies"] == 0
     assert stats["win_rate"] is None
 
@@ -446,3 +459,97 @@ def test_coachai_plus_reports_dominant_four_corner_subtactic():
     upper = analyze_coachai_plus_tactics(predictions)["rallies"][0]
     assert upper["primary_tactic"] == "four_corner"
     assert upper["four_corner_subtactic"] == "back_court_lock"
+
+
+def _hits(*rows):
+    return [
+        {"rally": 1, "ball_round": index, "hitter": hitter, "stroke": stroke, "analytics": {}}
+        for index, (hitter, stroke) in enumerate(rows, start=1)
+    ]
+
+
+def test_coachai_plus_detects_net_control_before_pressure():
+    predictions = _hits(
+        ("lower", "serve"), ("upper", "net_shot"), ("lower", "net_shot"),
+        ("upper", "net_shot"), ("lower", "lift"), ("upper", "net_attack"),
+    )
+    upper = next(row for row in analyze_coachai_plus_tactics(predictions)["rallies"] if row["player"] == "upper")
+    assert upper["primary_tactic"] == "net_control"
+
+
+def test_coachai_plus_no_longer_reports_flat_exchange_or_tempo_change():
+    # Both were removed: the pipeline's stroke and timing errors kept them at 30-40% agreement.
+    predictions = _hits(
+        ("upper", "serve"), ("lower", "lift"), ("upper", "clear"), ("lower", "drive"),
+        ("upper", "drive"), ("lower", "drive"), ("upper", "lift"), ("lower", "clear"),
+    )
+    for row in analyze_coachai_plus_tactics(predictions)["rallies"]:
+        types = {t["type"] for t in row["detected_tactics"]} | {row["primary_tactic"]}
+        assert not types & {"fast_drive_exchange", "tempo_change"}
+
+
+def test_coachai_plus_detects_early_attack_on_serve_return():
+    predictions = _hits(("upper", "serve"), ("lower", "net_attack"), ("upper", "lift"))
+    lower = next(row for row in analyze_coachai_plus_tactics(predictions)["rallies"] if row["player"] == "lower")
+    assert lower["primary_tactic"] == "early_attack"
+
+
+def test_coachai_plus_counts_net_kill_as_pressure():
+    predictions = _hits(
+        ("lower", "serve"), ("upper", "lift"), ("lower", "clear"), ("upper", "net_attack"),
+        ("lower", "lift"), ("upper", "drop"),
+    )
+    upper = next(row for row in analyze_coachai_plus_tactics(predictions)["rallies"] if row["player"] == "upper")
+    assert upper["primary_tactic"] == "full_court_pressure"
+
+
+def test_coachai_plus_labels_player_with_two_shots_as_short_rally():
+    predictions = _hits(("upper", "serve"), ("lower", "net_shot"), ("upper", "lift"), ("lower", "clear"))
+    rows = analyze_coachai_plus_tactics(predictions)["rallies"]
+    assert {row["primary_tactic"] for row in rows} == {"short_rally"}
+
+
+def _timed(*rows):
+    """(hitter, stroke, flight seconds, player position) per hit."""
+    return [
+        {
+            "rally": 1, "ball_round": index, "hitter": hitter, "stroke": stroke,
+            "analytics": {"flight_time_to_next_hit_seconds": flight, "player_position_court": position},
+        }
+        for index, (hitter, stroke, flight, position) in enumerate(rows, start=1)
+    ]
+
+
+def _types(predictions, player):
+    row = next(r for r in analyze_coachai_plus_tactics(predictions)["rallies"] if r["player"] == player)
+    return {t["type"] for t in row["detected_tactics"]}
+
+
+def test_coachai_plus_detects_absorbing_pressure():
+    predictions = _hits(
+        ("upper", "serve"), ("lower", "lift"), ("upper", "smash"), ("lower", "lift"),
+        ("upper", "smash"), ("lower", "lift"), ("upper", "net_attack"), ("lower", "net_shot"),
+    )
+    assert "absorb_pressure" in _types(predictions, "lower")
+
+
+def test_coachai_plus_detects_running_the_opponent():
+    corners = ([0.1, 0.95], [0.9, 0.6], [0.1, 0.95])  # lower player runs corner to corner
+    rows = []
+    for k in range(3):
+        rows += [("upper", "clear", 1.2, [0.5, 0.1]), ("lower", "lift", 1.2, corners[k])]
+    assert "run_opponent" in _types(_timed(*rows), "upper")
+    assert "run_opponent" not in _types(_timed(*rows), "lower")
+
+
+def test_style_profile_shares_are_disjoint_and_skip_serves():
+    from ai_classifier.analytics.match_analysis import style_profile
+
+    hits = [{"stroke": s, "analytics": {"flight_time_to_next_hit_seconds": f}} for s, f in (
+        ("serve", 0.8), ("smash", 0.5), ("net_attack", 0.4), ("net_shot", 0.9),
+        ("lift", 1.2), ("clear", 1.3), ("drop", 0.9), ("drive", 0.5), ("smash", 5.0),
+    )]
+    profile = style_profile(hits)
+    assert profile["shares"] == {"attack_share": 38, "net_share": 12, "defence_share": 25, "placement_share": 25}
+    assert profile["rally_strokes"] == 8
+    assert profile["median_flight_seconds"] == 0.9  # the 5 s gap to the next rally is ignored

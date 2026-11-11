@@ -1,12 +1,13 @@
-"""Collect the final paper runs into work_dirs/paper_final/<family>_seed<n>/.
+"""Collect the final paper runs into work_dirs/paper_mate/final/<family>_seed<n>/.
 
 Each run directory gets kap_best.pth, test_predictions.npz, model_kwargs.json and a
 metrics.json with test metrics computed from the saved predictions, so the
 evaluation scripts can treat every family the same way.
 
 Families:
-  main       gate-free KAPCrossTransV2, default 15/30 window (the paper's model)
-  gate       previous version with the sigmoid quality gate
+  main       gate-free KAPCrossTransV2 with MATE per contact phase (the paper's model)
+  one_token  the same model with a single attention-pooled MATE vector
+  gate       the same model with the sigmoid quality gate of the previous version
   no_rgb, no_noise, no_phase, no_cross, no_hitter   ablations of ``main``
 
 Example:
@@ -31,17 +32,20 @@ for path in (REPO_ROOT / "src", REPO_ROOT / "scripts" / "training"):
 from train_kap_scratch import confusion_metrics  # noqa: E402
 
 W = REPO_ROOT / "work_dirs"
-FINAL = W / "paper_final"
-BASE = {"gate": "none", "pooling": "three", "use_cross": True, "use_hitter": True, "use_rgb": True}
+RUNS = W / "paper_mate/runs"
+FINAL = W / "paper_mate/final"
+BASE = {"gate": "none", "pooling": "three", "use_cross": True, "use_hitter": True, "use_rgb": True,
+        "rgb_dim": 224, "rgb_slots": [1, 2, 3]}
 FAMILIES = {
-    "main": (BASE, [W / "paper_ablation/no_gate_seed1", W / "paper_ablation/no_gate_seed2",
-                    *sorted(W.glob("paper_main/main_default_seed*"))]),
-    "gate": ({**BASE, "gate": "sigmoid"}, sorted(W.glob("paper_ablation/full_seed*"))),
-    "no_rgb": ({**BASE, "use_rgb": False}, sorted(W.glob("paper_main/no_rgb_seed*"))),
-    "no_noise": (BASE, sorted(W.glob("paper_main/no_noise_seed*"))),
-    "no_phase": ({**BASE, "pooling": "mean"}, sorted(W.glob("paper_main/no_phase_seed*"))),
-    "no_cross": ({**BASE, "use_cross": False}, sorted(W.glob("paper_main/no_cross_seed*"))),
-    "no_hitter": ({**BASE, "use_hitter": False}, sorted(W.glob("paper_main/no_hitter_seed*"))),
+    "main": (BASE, sorted(RUNS.glob("main_seed*"))),
+    "one_token": ({**BASE, "rgb_slots": None}, sorted(RUNS.glob("one_token_seed*"))),
+    "gate": ({**BASE, "gate": "sigmoid"}, sorted(RUNS.glob("gate_seed*"))),
+    # The structured streams are unchanged, so these runs do not depend on the RGB encoder.
+    "no_rgb": ({**BASE, "use_rgb": False, "rgb_slots": None}, sorted(W.glob("paper_main/no_rgb_seed*"))),
+    "no_noise": (BASE, sorted(RUNS.glob("no_noise_seed*"))),
+    "no_phase": ({**BASE, "pooling": "mean"}, sorted(RUNS.glob("no_phase_seed*"))),
+    "no_cross": ({**BASE, "use_cross": False}, sorted(RUNS.glob("no_cross_seed*"))),
+    "no_hitter": ({**BASE, "use_hitter": False}, sorted(RUNS.glob("no_hitter_seed*"))),
 }
 
 
