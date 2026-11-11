@@ -119,9 +119,10 @@ def main() -> None:
     train_set, val_set = subset("train", True), subset("val", False)
     missing = sum(not (args.cache / f"{x}.npy").exists() for x in ids)
     print(f"[data] train={len(train_set)} val={len(val_set)} clips missing in cache={missing}", flush=True)
+    # No pin_memory: its thread failed on Windows with "CUDA error: resource already mapped".
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=args.workers,
-                              pin_memory=True, persistent_workers=True, drop_last=True)
-    val_loader = DataLoader(val_set, batch_size=64, num_workers=args.workers, pin_memory=True, persistent_workers=True)
+                              persistent_workers=True, drop_last=True)
+    val_loader = DataLoader(val_set, batch_size=64, num_workers=args.workers)
 
     model = RGBEncoder().to(device)
     print(f"[model] params={sum(p.numel() for p in model.parameters())}", flush=True)
@@ -132,8 +133,16 @@ def main() -> None:
     steps = args.epochs * len(train_loader)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr, total_steps=steps, pct_start=0.1)
     scaler = torch.amp.GradScaler()
-    best, history = -1.0, []
-    for epoch in range(1, args.epochs + 1):
+    best, history, first_epoch = -1.0, [], 1
+    resume = args.output_dir / "last.pth"
+    if resume.exists():
+        state = torch.load(resume, map_location=device, weights_only=False)
+        model.load_state_dict(state["model"]); optimizer.load_state_dict(state["optimizer"])
+        scheduler.load_state_dict(state["scheduler"]); scaler.load_state_dict(state["scaler"])
+        torch.set_rng_state(state["torch_rng"].cpu())
+        best, history, first_epoch = state["best"], state["history"], state["epoch"] + 1
+        print(f"[resume] from epoch {state['epoch']}", flush=True)
+    for epoch in range(first_epoch, args.epochs + 1):
         model.train()
         start, total, seen = time.time(), 0.0, 0
         for clips, labels in train_loader:
@@ -153,8 +162,15 @@ def main() -> None:
         if val["macro_f1"] > best:
             best = val["macro_f1"]
             torch.save({"model": model.state_dict(), "epoch": epoch}, args.output_dir / "rgb_encoder_best.pth")
+        temporary = args.output_dir / "last.tmp"
+        torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(),
+                    "scaler": scaler.state_dict(), "torch_rng": torch.get_rng_state(), "epoch": epoch,
+                    "best": best, "history": history}, temporary)
+        temporary.replace(resume)
 
     model.load_state_dict(torch.load(args.output_dir / "rgb_encoder_best.pth", weights_only=False)["model"])
+    # Persistent workers would otherwise stay alive next to the loaders below and exhaust RAM.
+    del train_loader, val_loader
     test_set = subset("test", False)
     test = evaluate(model, DataLoader(test_set, batch_size=64, num_workers=args.workers), device)
     print(f"[test] RGB alone acc={test['accuracy']:.4f} f1={test['macro_f1']:.4f}", flush=True)
