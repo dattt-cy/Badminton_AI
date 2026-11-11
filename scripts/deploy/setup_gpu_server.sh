@@ -58,12 +58,17 @@ if ! command -v uv >/dev/null; then
 fi
 export PATH="$HOME/.local/bin:$PATH"
 [ -x "$PY" ] || uv venv -q --seed --python 3.12 "$VENV"
-"$PY" -m pip install -q --upgrade pip
-# cu128 is required by RTX 50xx (Blackwell) and also runs older cards such as the T4.
-"$PY" -m pip install -q torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
-"$PY" -m pip install -q -r "$AI_DIR/requirements.txt" -r "$WORKER_DIR/requirements.txt"
+# uv downloads in parallel and resumes dropped connections, which pip did not on a slow rented host.
+# No cache: rented disks can be as small as 16 GB.
+export UV_NO_CACHE=1 UV_HTTP_TIMEOUT=120
+uvpip() { uv pip install --python "$PY" "$@"; }
+# torch 2.8 on PyPI is the CUDA 12.8 build, which RTX 50xx (Blackwell) requires and older cards also run.
+# PyPI's CDN is used instead of download.pytorch.org, which stalled on one host.
+uvpip torch==2.8.0 torchvision==0.23.0
+uvpip -r "$AI_DIR/requirements.txt" -r "$WORKER_DIR/requirements.txt"
 # yt-dlp needs a JavaScript runtime for YouTube; the deno wheel puts one in the venv.
-"$PY" -m pip install -q "yt-dlp[default]" deno
+uvpip "yt-dlp[default]" deno
+"$PY" -c "import torch; assert torch.version.cuda.startswith('12.8'), torch.version.cuda"
 
 step "Tải model ($MODELS_TAG)"
 mkdir -p "$CKPT_DIR"
