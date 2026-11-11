@@ -52,7 +52,12 @@ fi
 git -C "$AI_DIR/external/TrackNetV3" checkout -q "$TRACKNET_COMMIT"
 
 step "Cài Python packages (torch 2.8 cu128 khoảng 3 GB, lâu nhất ở bước này)"
-[ -x "$PY" ] || python3 -m venv "$VENV"
+# Images based on Ubuntu 22.04 ship Python 3.10, too old for numpy/scikit-learn here, so uv brings its own 3.12.
+if ! command -v uv >/dev/null; then
+    curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null
+fi
+export PATH="$HOME/.local/bin:$PATH"
+[ -x "$PY" ] || uv venv -q --seed --python 3.12 "$VENV"
 "$PY" -m pip install -q --upgrade pip
 # cu128 is required by RTX 50xx (Blackwell) and also runs older cards such as the T4.
 "$PY" -m pip install -q torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
