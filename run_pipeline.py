@@ -35,6 +35,7 @@ if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from ai_classifier.analytics import (  # noqa: E402
+    apply_next_hitter_landing,
     assign_rallies,
     build_stroke_analytics,
     build_match_analysis,
@@ -340,6 +341,9 @@ def _postprocess_predictions(
                 log(f"    - Frame {ch['frame']}: {ch['original_stroke']} -> {ch['refined_stroke']}")
         else:
             log("[+] Tactical Sequence Decoder: all predictions sequence-consistent (0 changes)")
+
+    # Landing estimate from the returning player's position (hitters and rallies are final now).
+    apply_next_hitter_landing(predictions)
 
     return {
         "predictions": predictions,
