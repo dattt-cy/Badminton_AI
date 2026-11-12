@@ -553,3 +553,50 @@ def test_style_profile_shares_are_disjoint_and_skip_serves():
     assert profile["shares"] == {"attack_share": 38, "net_share": 12, "defence_share": 25, "placement_share": 25}
     assert profile["rally_strokes"] == 8
     assert profile["median_flight_seconds"] == 0.9  # the 5 s gap to the next rally is ignored
+
+
+def _rally(rally, start, server, receiver, *, positions=False):
+    hits = [
+        {"refined_frame": start, "stroke": "serve", "hitter": server, "rally": rally, "confidence": 0.9},
+        {"refined_frame": start + 25, "stroke": "lift", "hitter": receiver, "rally": rally, "confidence": 0.9},
+        {"refined_frame": start + 50, "stroke": "smash", "hitter": server, "rally": rally, "confidence": 0.9},
+    ]
+    if positions:
+        for hit in hits:
+            y = 0.2 if hit["hitter"] == "upper" else 0.8
+            hit["analytics"] = {"player_position_court": [0.3, y], "hitting_area_3x3": 1 if y < 0.5 else 7}
+    return hits
+
+
+def test_players_keep_their_side_after_changing_ends():
+    from ai_classifier.analytics.match_analysis import normalize_player_ends
+
+    names = {"upper": "A", "lower": "B"}
+    # Player A starts in the far half and wins every rally; ends change for game 2.
+    predictions = _rally(1, 0, "upper", "lower", positions=True) + _rally(2, 900, "upper", "lower", positions=True)
+    predictions += _rally(3, 900 + 150 * 30, "lower", "upper", positions=True)
+    spans = normalize_player_ends(predictions, names)
+    assert spans == [{"game": 2, "from_rally": 3, "to_rally": 3}]
+    game2 = [p for p in predictions if p["rally"] == 3]
+    assert [p["hitter"] for p in game2] == ["upper", "lower", "upper"]
+    assert game2[0]["hitter_name"] == "A"
+    # Drawn as if A never left the far half.
+    assert game2[0]["analytics"]["player_position_court"] == [0.7, 0.2]
+    assert game2[0]["analytics"]["hitting_area_3x3"] == 3
+
+
+def test_scoreboard_starts_each_game_at_zero_with_ocr():
+    predictions = _rally(1, 0, "lower", "upper") + _rally(2, 900, "lower", "upper")
+    predictions += _rally(3, 900 + 150 * 30, "lower", "upper")
+    ocr = {
+        "initial_score": [5, 5],
+        "initial_time_seconds": 0.0,
+        "events": [
+            {"time_seconds": 31.0, "previous_score": [5, 5], "score": [5, 6], "point_winner": "second", "game": 1},
+            # Read during game 2 but still showing game 1, as broadcasts do after the break.
+            {"time_seconds": 182.0, "previous_score": [5, 6], "score": [5, 7], "point_winner": "second", "game": 1},
+        ],
+    }
+    scoreboard = analyze_scoreboard(predictions, scoreboard_ocr=ocr)
+    assert [r["game_number"] for r in scoreboard["rallies"]] == [1, 1, 2]
+    assert scoreboard["rallies"][2]["score_text"] == "0 - 1"

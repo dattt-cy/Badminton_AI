@@ -96,6 +96,120 @@ def _rally_bounds_seconds(hits: list[dict[str, Any]], fps: float) -> tuple[float
     return round(start / fps, 2), round(end / fps, 2)
 
 
+GAME_BREAK_SECONDS = 100.0
+# Court-normalized points (x across, y from the far baseline to the near one) and 3x3
+# areas numbered row by row over the whole court; both rotate 180 degrees with the ends.
+_COURT_POINT_KEYS = (
+    "player_position_court",
+    "opponent_position_court",
+    "contact_shuttle_projection_court",
+    "landing_position_court_proxy",
+    "landing_position_court_trajectory_proxy",
+)
+_COURT_AREA_KEYS = ("hitting_area_3x3", "landing_area_3x3_proxy")
+
+
+def _rally_groups(predictions: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    groups: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for p in predictions:
+        groups[int(p.get("rally", 1))].append(p)
+    return [groups[k] for k in sorted(groups)]
+
+
+def _game_of_each_rally(rallies: list[list[dict[str, Any]]], fps: float, game_break_seconds: float) -> list[int]:
+    """Game number of each rally: a pause of ``game_break_seconds`` or more starts a new game.
+
+    In ShuttleSet every between-game break lasts 105 s or more, while fewer than 0.2%
+    of within-game pauses exceed 100 s.
+    """
+    games: list[int] = []
+    game, previous_end = 1, None
+    for hits in rallies:
+        start, end = _rally_bounds_seconds(hits, fps)
+        if previous_end is not None and start - previous_end >= game_break_seconds:
+            game += 1
+        games.append(game)
+        previous_end = end
+    return games
+
+
+def _swap_ends(hits: list[dict[str, Any]], player_names: dict[str, str]) -> None:
+    for hit in hits:
+        if hit.get("hitter") in ("upper", "lower"):
+            hit["hitter"] = opponent_of(hit["hitter"])
+            hit["hitter_name"] = player_names.get(hit["hitter"], hit["hitter"])
+        analytics = hit.get("analytics")
+        if not isinstance(analytics, dict):
+            continue
+        for key in _COURT_POINT_KEYS:
+            point = analytics.get(key)
+            if isinstance(point, (list, tuple)) and len(point) == 2 and all(isinstance(v, (int, float)) for v in point):
+                analytics[key] = [round(1.0 - float(point[0]), 5), round(1.0 - float(point[1]), 5)]
+        for key in _COURT_AREA_KEYS:
+            area = analytics.get(key)
+            if isinstance(area, int) and 1 <= area <= 9:
+                analytics[key] = 10 - area
+
+
+def normalize_player_ends(
+    predictions: list[dict[str, Any]],
+    player_names: dict[str, str] | None = None,
+    *,
+    fps: float = 30.0,
+    total_frames: int | None = None,
+    scoreboard_ocr: dict[str, Any] | None = None,
+    game_break_seconds: float = GAME_BREAK_SECONDS,
+) -> list[dict[str, Any]]:
+    """Make ``hitter`` name a player rather than a camera side, in place.
+
+    The detector reports which half of the image a hitter stands in, and the user names
+    the player in each half at the start of the video. Players change ends after every
+    game and at 11 points in the third, so from then on the hits, court positions and
+    areas of those rallies are swapped back: "upper" stays the player who started in the
+    far half, and court points are drawn as if that player never changed ends.
+    Returns the swapped spans as ``{"game", "from_rally", "to_rally"}``.
+    """
+    names = player_names or {"upper": "upper", "lower": "lower"}
+    rallies = _rally_groups(predictions)
+    if not rallies:
+        return []
+    games = _game_of_each_rally(rallies, fps, game_break_seconds)
+    swapped = [False] * len(rallies)
+    for i, game in enumerate(games):
+        if game % 2 == 0:
+            swapped[i] = True
+            _swap_ends(rallies[i], names)
+
+    # Third game: ends change when the leader reaches 11, which needs the score.
+    third = [i for i, game in enumerate(games) if game == 3]
+    if third:
+        board = analyze_scoreboard(
+            predictions, names, fps=fps, total_frames=total_frames,
+            scoreboard_ocr=scoreboard_ocr, game_break_seconds=game_break_seconds,
+        )
+        rows = {int(r["rally_id"]): r for r in board["rallies"]}
+        for position, i in enumerate(third):
+            row = rows.get(int(rallies[i][0].get("rally", 0)))
+            if row and max(row["score_upper"], row["score_lower"]) >= 11:
+                for j in third[position + 1:]:
+                    swapped[j] = True
+                    _swap_ends(rallies[j], names)
+                break
+
+    spans: list[dict[str, Any]] = []
+    for i, is_swapped in enumerate(swapped):
+        if not is_swapped:
+            continue
+        rally_id = int(rallies[i][0].get("rally", 0))
+        if spans and spans[-1]["game"] == games[i] and spans[-1]["_last"] == i - 1:
+            spans[-1].update(to_rally=rally_id, _last=i)
+        else:
+            spans.append({"game": games[i], "from_rally": rally_id, "to_rally": rally_id, "_last": i})
+    for span in spans:
+        del span["_last"]
+    return spans
+
+
 def infer_ocr_first_row_side(
     rallies: list[list[dict[str, Any]]],
     ocr_events: list[dict[str, Any]],
@@ -133,13 +247,13 @@ def analyze_scoreboard(
     total_frames: int | None = None,
     edge_window_seconds: float = 5.0,
     scoreboard_ocr: dict[str, Any] | None = None,
-    game_break_seconds: float = 100.0,
+    game_break_seconds: float = GAME_BREAK_SECONDS,
 ) -> dict[str, Any]:
     """Estimate rally outcomes and align scores with OCR scoreboard evidence & Badminton server rules.
 
-    Without OCR, a pause of at least ``game_break_seconds`` between rallies
-    starts a new game: in ShuttleSet every between-game break lasts 105 s or
-    more, while fewer than 0.2% of within-game pauses exceed 100 s.
+    A pause of at least ``game_break_seconds`` between rallies starts a new game
+    (see :func:`_game_of_each_rally`), which starts from 0-0. An OCR score change is
+    only used for a rally of the game the scoreboard was showing.
     """
     names = player_names or {"upper": "Upper Player", "lower": "Lower Player"}
     rallies_dict: dict[int, list[dict[str, Any]]] = defaultdict(list)
@@ -162,6 +276,16 @@ def analyze_scoreboard(
         return score
 
     initial_score = to_court_order(initial_score)
+    # The first reading is the score before the first rally only when it was read by
+    # then; a scoreboard first shown minutes later says nothing about the start.
+    initial_time = (scoreboard_ocr or {}).get("initial_time_seconds") if isinstance(scoreboard_ocr, dict) else None
+    if initial_time is not None and rally_keys:
+        _, first_end = _rally_bounds_seconds(rallies_dict[rally_keys[0]], fps)
+        if float(initial_time) > first_end + 30.0:
+            initial_score = None
+    game_of_rally = dict(zip(
+        rally_keys, _game_of_each_rally([rallies_dict[k] for k in rally_keys], fps, game_break_seconds)
+    ))
 
     if initial_score and isinstance(initial_score, (list, tuple)) and len(initial_score) == 2:
         curr_score = [int(initial_score[0]), int(initial_score[1])]
@@ -172,7 +296,6 @@ def analyze_scoreboard(
     rally_summaries: list[dict[str, Any]] = []
     games: list[dict[str, Any]] = []
     game_number = 1
-    previous_end_sec: float | None = None
 
     def close_game() -> None:
         games.append({
@@ -191,15 +314,10 @@ def analyze_scoreboard(
         start_sec = round(start_frame / fps, 2)
         end_sec = round(end_frame / fps, 2)
 
-        if (
-            not ocr_events
-            and previous_end_sec is not None
-            and start_sec - previous_end_sec >= game_break_seconds
-        ):
+        if game_of_rally[r_id] != game_number:
             close_game()
-            game_number += 1
+            game_number = game_of_rally[r_id]
             curr_score = [0, 0]
-        previous_end_sec = end_sec
 
         next_start_sec = (
             round(int(rallies_dict[rally_keys[i + 1]][0].get("refined_frame", rallies_dict[rally_keys[i + 1]][0].get("frame", 0))) / fps, 2)
@@ -219,7 +337,11 @@ def analyze_scoreboard(
         matched_ev = None
         for ev_idx, ev in enumerate(ocr_events):
             ev_time = float(ev.get("time_seconds", 0.0))
-            if ev_idx not in used_ocr_idx and (end_sec - 3.0) <= ev_time <= (next_start_sec + 5.0):
+            if (
+                ev_idx not in used_ocr_idx
+                and int(ev.get("game", game_number)) == game_number
+                and (end_sec - 3.0) <= ev_time <= (next_start_sec + 5.0)
+            ):
                 matched_ev = ev
                 used_ocr_idx.add(ev_idx)
                 break
@@ -233,7 +355,7 @@ def analyze_scoreboard(
             curr_score = [int(score[0]), int(score[1])]
             complete = True
             is_estimated = False
-        elif i == 0 and ocr_events and end_sec < float(ocr_events[0].get("time_seconds", 0.0)):
+        elif i == 0 and ocr_events and initial_score and end_sec < float(ocr_events[0].get("time_seconds", 0.0)):
             # First rally in video ending before first detected score change
             prev_s = (
                 to_court_order(ocr_events[0]["previous_score"])
@@ -805,7 +927,17 @@ def build_match_analysis(
     total_frames: int | None = None,
     scoreboard_ocr: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Single-call API to generate full CoachAI-aligned tactical intelligence."""
+    """Single-call API to generate full CoachAI-aligned tactical intelligence.
+
+    Swaps ``predictions`` to fixed player ends first (:func:`normalize_player_ends`).
+    """
+    ends_swapped = normalize_player_ends(
+        predictions,
+        player_names,
+        fps=fps,
+        total_frames=total_frames,
+        scoreboard_ocr=scoreboard_ocr,
+    )
     scoreboard = analyze_scoreboard(
         predictions,
         player_names,
@@ -829,7 +961,7 @@ def build_match_analysis(
     movement = analyze_sparse_movement(predictions)
 
     return {
-        "scoreboard": scoreboard,
+        "scoreboard": {**scoreboard, "ends_swapped": ends_swapped},
         "tactical_patterns": patterns,
         "spatial_distribution_3x3": spatial,
         "player_profiles": player_profiles.get("profiles", {}),
