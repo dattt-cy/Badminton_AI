@@ -168,15 +168,17 @@ class FastTrackNet:
         w_scaler = orig_w / TRACKNET_WIDTH
         h_scaler = orig_h / TRACKNET_HEIGHT
 
-        # Convert to RGB and resize using multi-threaded OpenCV INTER_CUBIC (matches PIL Bicubic within <0.2 px).
+        # Resize using OpenCV INTER_CUBIC (matches PIL Bicubic within <0.2 px), then convert to RGB.
+        # Resizing filters each channel alike, so swapping channels afterwards gives the same bytes
+        # while converting 9x fewer pixels.
         # Neighbouring hit windows overlap, so a per-video cache keyed by frame index skips repeated resizes.
         resized_rgb = []
         for img, f_idx in zip(bgr_frames, frame_indices):
             small = resize_cache.get(f_idx) if resize_cache is not None else None
             if small is None:
-                small = cv2.resize(
-                    cv2.cvtColor(img, cv2.COLOR_BGR2RGB), (TRACKNET_WIDTH, TRACKNET_HEIGHT),
-                    interpolation=cv2.INTER_CUBIC,
+                small = cv2.cvtColor(
+                    cv2.resize(img, (TRACKNET_WIDTH, TRACKNET_HEIGHT), interpolation=cv2.INTER_CUBIC),
+                    cv2.COLOR_BGR2RGB,
                 )
                 if resize_cache is not None:
                     resize_cache[f_idx] = small

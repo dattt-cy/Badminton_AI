@@ -61,6 +61,11 @@ from scripts.inference.robust_aligned_video_pipeline import AlignedVideoPipeline
 from scripts.inference.scan_video_hit_rgb import load_model, scan_video  # noqa: E402
 from ai_classifier.model_cache import cached, file_key  # noqa: E402
 
+# Importing Ultralytics sets OpenCV to one thread, which guards its DataLoader workers; none run
+# here. Four threads made resizing ~33% faster and a 5-minute clip 120 s instead of 133 s on an
+# RTX 3050 laptop, with identical predictions. More threads gained nothing.
+cv2.setNumThreads(min(4, cv2.getNumberOfCPUs()))
+
 
 
 def parse_args() -> argparse.Namespace:
