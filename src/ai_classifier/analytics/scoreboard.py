@@ -31,9 +31,11 @@ BWF_SCOREBOARD_LAYOUTS: dict[str, tuple[int, int, int, int]] = {
     # 2025-2026 World Tour graphics: a compact plate in the top-left corner, names at
     # x 50-220 and the score columns from x 225. Also used by HYLO Open 2026.
     "bwf_2025": (32, 94, 218, 330),
-    # Tokyo 2020 Olympics (OBS feed, e.g. NHK): country, games-won column at x 237-262, then
-    # the current game's points; only the points column is read.
-    "olympic_tokyo_2020": (33, 99, 263, 308),
+    # BWF World Championships 2026: a wider name plate, the score columns from x 258.
+    "bwf_wc_2026": (38, 92, 255, 360),
+    # Tokyo 2020 Olympics (OBS feed, e.g. NHK): country, then a games-won column at x 237-262
+    # and the current game's points at x 265-305.
+    "olympic_tokyo_2020": (33, 99, 235, 308),
 }
 
 # Distance between two score columns as a share of the ROI width, for the layouts whose
@@ -41,7 +43,25 @@ BWF_SCOREBOARD_LAYOUTS: dict[str, tuple[int, int, int, int]] = {
 BWF_SCOREBOARD_COLUMN_SHARE: dict[str, float] = {
     # Columns centred at x 240, 272 and 304 of an ROI from x 218 to 330.
     "bwf_2025": 32 / 112,
+    # Columns centred at x 275, 308 and 341 of an ROI from x 255 to 360.
+    "bwf_wc_2026": 33 / 105,
+    # Games won centred at x 250, points at x 285, of an ROI from x 235 to 308.
+    "olympic_tokyo_2020": 35 / 73,
 }
+
+# Layouts whose first column holds the games each player has won, not a finished game's
+# score: the game number is then their sum plus one.
+GAMES_WON_COLUMN_LAYOUTS = {"olympic_tokyo_2020"}
+
+# Layouts tried first when picking: one whose reads reach this share of the best layout's
+# wins. The Olympic graphic needs both its columns, so it reads nothing on other videos,
+# while the wide World Championships ROI also reads the Olympic points column.
+PREFERRED_LAYOUTS = ("olympic_tokyo_2020",)
+PREFERRED_LAYOUT_SHARE = 0.6
+
+# A digit box this close to the ROI's left edge (px at 1280x720) is cut off: the ROI sits on
+# another layout's columns, not on its own.
+LEFT_EDGE_PX = 2
 
 
 def _scale_roi(roi: tuple[int, int, int, int], height: int, width: int) -> tuple[int, int, int, int]:
@@ -80,12 +100,15 @@ def pick_scoreboard_layout(crops_by_layout: dict[str, dict[int, Any]], samples: 
     A tie keeps the first layout, so a video without a scoreboard behaves as before.
 
     A wide ROI can also read another layout's digits: the 2025 ROI covers the whole Tokyo
-    2020 scoreboard, whose points sit where the 2025 graphic puts a third game. For a layout
-    with known columns, a reading only counts in a column at most one past the furthest
-    already seen (the second column from the start), as games add columns one at a time.
+    2020 scoreboard, whose points sit where the 2025 graphic puts a third game. So a reading
+    only counts when no digit is cut by the ROI's left edge and, for a layout with known
+    columns, when its columns run from the first without a gap and the rightmost is at most
+    one past the furthest already seen (the second from the start), as games add columns
+    one at a time.
     """
     reader = _ocr_reader()
     best_name, best_reads = next(iter(crops_by_layout)), -1
+    reads_by_layout: dict[str, int] = {}
     for name, crops in crops_by_layout.items():
         frames = sorted(crops)
         step = max(1, len(frames) // samples)
@@ -94,17 +117,24 @@ def pick_scoreboard_layout(crops_by_layout: dict[str, dict[int, Any]], samples: 
         reads = 0
         for frame_index in frames[::step][:samples]:
             crop = crops[frame_index]
-            reading = read_score_and_column(crop, (0, crop.shape[0], 0, crop.shape[1]), reader, column_share)
+            reading = read_score_and_column(
+                crop, (0, crop.shape[0], 0, crop.shape[1]), reader, column_share, strict=True,
+                games_won=name in GAMES_WON_COLUMN_LAYOUTS,
+            )
             if reading is None:
                 continue
             column = reading[1]
-            if column is not None:
+            if column is not None and name not in GAMES_WON_COLUMN_LAYOUTS:
                 if column > furthest_column + 1:
                     continue
                 furthest_column = max(furthest_column, column)
             reads += 1
+        reads_by_layout[name] = reads
         if reads > best_reads:
             best_name, best_reads = name, reads
+    for name in PREFERRED_LAYOUTS:
+        if best_reads > 0 and reads_by_layout.get(name, 0) >= PREFERRED_LAYOUT_SHARE * best_reads:
+            return name
     return best_name
 
 
@@ -134,9 +164,15 @@ def read_score_and_column(
     roi: tuple[int, int, int, int],
     reader: Any,
     column_share: float | None = None,
+    strict: bool = False,
+    games_won: bool = False,
 ) -> tuple[Score, int | None] | None:
     """The current-game score and, given the layout's ``column_share``, the 0-based column
-    it was read from, which is the game number minus one."""
+    it was read from, which is the game number minus one.
+
+    ``strict`` also rejects a reading whose digits do not sit in this layout's columns (see
+    :func:`pick_scoreboard_layout`). With ``games_won`` the first column holds games won,
+    so the reading needs both columns and its column is the games played so far."""
     y1, y2, x1, x2 = roi
     height, width = frame.shape[:2]
     y1, y2 = max(0, y1), min(height, y2)
@@ -147,14 +183,28 @@ def read_score_and_column(
     crop = frame[y1:y2, x1:x2]
     reading = _rightmost_per_row(crop, reader)
     if reading is not None:
-        score, position = reading
+        score, position, positions = reading
+        if games_won and column_share:
+            columns = [int(p / column_share) for p, _, _ in positions]
+            won = [n for p, _, n in positions if int(p / column_share) == 0]
+            if set(columns) != {0, 1} or len(won) != 2 or max(won) > 2:
+                return None
+            return score, sum(won)
+        if strict:
+            edge = LEFT_EDGE_PX / crop.shape[1]
+            if min(p - w / 2 for p, w, _ in positions) <= edge:
+                return None
+            if column_share:
+                columns = {int(p / column_share) for p, _, _ in positions}
+                if columns != set(range(max(columns) + 1)):
+                    return None
         return score, int(position / column_share) if column_share else None
     # EasyOCR sometimes misses a lone digit in the wide crop that it finds in the
     # first column alone, which is the whole score during the first game.
     reading = _rightmost_per_row(
         crop[:, : max(1, round(crop.shape[1] * FIRST_COLUMN_SHARE))], reader, single_column=True
     )
-    if reading is None:
+    if reading is None or strict:
         return None
     return reading[0], 0 if column_share else None
 
@@ -181,8 +231,11 @@ def _whiteness(crop: Any) -> Any:
     return (hsv[..., 2] * (1.0 - hsv[..., 1] / 255.0)).astype(np.uint8)
 
 
-def _rightmost_per_row(crop: Any, reader: Any, single_column: bool = False) -> tuple[Score, float] | None:
-    """The score and the centre of its column as a share of the crop width."""
+def _rightmost_per_row(
+    crop: Any, reader: Any, single_column: bool = False
+) -> tuple[Score, float, list[tuple[float, float, int]]] | None:
+    """The score, the centre of its column and the (centre, width, number) of every number read,
+    positions as shares of the crop width."""
     enlarged = cv2.resize(_whiteness(crop), None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
     results = reader.readtext(
         enlarged, allowlist="0123456789", detail=1, paragraph=False
@@ -190,6 +243,7 @@ def _rightmost_per_row(crop: Any, reader: Any, single_column: bool = False) -> t
     middle = enlarged.shape[0] / 2
     # Row 0 is the first (upper) scoreboard row; each holds (left x, number) pairs.
     rows: list[list[tuple[float, int]]] = [[], []]
+    widths: dict[float, float] = {}
     for box, text, confidence in results:
         if confidence < MIN_DIGIT_CONFIDENCE:
             continue
@@ -203,6 +257,7 @@ def _rightmost_per_row(crop: Any, reader: Any, single_column: bool = False) -> t
             if int(num_str) <= 30:
                 share = (max(xs) - min(xs)) / len(numbers)
                 row.append((min(xs) + (k + 0.5) * share, int(num_str)))
+                widths[row[-1][0]] = share
     if rows[0] and rows[1]:
         # The current game is the rightmost column of both rows. A row whose digit there was
         # missed would otherwise give the previous game's score (21 instead of 3), so the
@@ -211,19 +266,26 @@ def _rightmost_per_row(crop: Any, reader: Any, single_column: bool = False) -> t
         tolerance = enlarged.shape[1] * CURRENT_COLUMN_TOLERANCE
         current = [[item for item in row if item[0] >= column - tolerance] for row in rows]
         if current[0] and current[1]:
-            return (max(current[0])[1], max(current[1])[1]), column / enlarged.shape[1]
+            width = enlarged.shape[1]
+            positions = [(x / width, widths[x] / width, n) for row in rows for x, n in row]
+            return (max(current[0])[1], max(current[1])[1]), column / width, positions
         return None
     if not single_column:
         return None
     # One column read as a single box holds both rows' digits ("14").
     single = [n for row in rows for _, n in row]
     if len(single) == 1 and len(str(single[0])) == 2:
-        return (int(str(single[0])[0]), int(str(single[0])[1])), 0.0
+        return (int(str(single[0])[0]), int(str(single[0])[1])), 0.0, []
     return None
 
 
 # The first reading of a new game, taken a point or two after its 0-0 at most.
 NEW_GAME_MAX_POINTS = 2
+
+# Readings in a row from a column right of the current game's before it is the next game. The
+# 2025 graphic briefly adds a "Challenges Remaining" column (2 / 1) of the same look for about
+# five seconds; a new game's column stays until the game ends.
+NEW_COLUMN_CONFIRMATIONS = 12
 
 
 def _plausible_change(previous: Score, current: Score) -> bool:
@@ -263,13 +325,13 @@ class ScoreChangeTracker:
     # fades during a replay only those dark digits stay readable, so reading one of them
     # again means the current column was missed.
     finished_games: list[Score] = field(default_factory=list)
+    new_column_count: int = 0
 
     def _resync(self, score: Score, frame: int, fps: float, column: int | None = None) -> None:
         previous = self.current
-        new_column = column is not None and column + 1 > self.game
         lowered = score[0] < previous[0] or score[1] < previous[1]
         if column is not None:
-            misread = lowered and not new_column and bool(self.events)
+            misread = lowered and bool(self.events)
         else:
             # A misread digit lowers one player's score (7-8 read as 1-8); a new game lowers both,
             # even when it is first read a few points in (an edited video skips its 0-0).
@@ -288,9 +350,9 @@ class ScoreChangeTracker:
         self.resync_count += 1
         if self.resync_count < self.resync_confirmations:
             return
-        if new_column or (column is None and self.game_points and sum(score) < sum(previous)):
+        if column is None and self.game_points and sum(score) < sum(previous):
             self.finished_games.append(previous)
-            self.game = column + 1 if new_column else self.game + 1
+            self.game += 1
             self.game_points = 0
         elif not self.events:
             # Nothing was recorded from the first reading, so it was the misread.
@@ -309,11 +371,38 @@ class ScoreChangeTracker:
         self.resync_candidate = None
         self.resync_count = 0
 
+    def _new_column(self, score: Score, column: int, frame: int, fps: float) -> None:
+        self.new_column_count += 1
+        if self.new_column_count < NEW_COLUMN_CONFIRMATIONS:
+            return
+        previous = self.current
+        self.finished_games.append(previous)
+        self.game = column + 1
+        self.game_points = 0
+        self.resyncs.append({
+            "frame": frame,
+            "time_seconds": round(frame / fps, 3) if fps > 0 else None,
+            "previous_score": list(previous),
+            "score": list(score),
+            "game": self.game,
+        })
+        self.current = score
+        self.candidate = None
+        self.confirmations = 0
+        self.resync_candidate = None
+        self.resync_count = 0
+        self.new_column_count = 0
+
     def observe(self, score: Score | None, frame: int, fps: float, column: int | None = None) -> None:
         if score is None or score in self.finished_games:
             return
-        if column is not None and self.current is not None and column + 1 < self.game:
-            return
+        if column is not None and self.current is not None:
+            if column + 1 < self.game:
+                return
+            if column + 1 > self.game:
+                self._new_column(score, column, frame, fps)
+                return
+            self.new_column_count = 0
         if self.current is None:
             self.initial = score
             self.initial_frame = frame
@@ -328,7 +417,7 @@ class ScoreChangeTracker:
             self.resync_candidate = None
             self.resync_count = 0
             return
-        if not _plausible_change(self.current, score) or (column is not None and column + 1 > self.game):
+        if not _plausible_change(self.current, score):
             self._resync(score, frame, fps, column)
             return
         self.resync_candidate = None
@@ -385,6 +474,7 @@ def extract_score_events(
     total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
     tracker = ScoreChangeTracker(confirmations_required=confirmations_required)
     column_share = BWF_SCOREBOARD_COLUMN_SHARE.get(layout or "")
+    games_won = layout in GAMES_WON_COLUMN_LAYOUTS
     reads = 0
     try:
         for frame_index in range(0, total_frames, max(1, sample_interval_frames)):
@@ -392,13 +482,15 @@ def extract_score_events(
                 crop = roi_crops.get(frame_index)
                 if crop is None:
                     continue
-                reading = read_score_and_column(crop, (0, crop.shape[0], 0, crop.shape[1]), reader, column_share)
+                reading = read_score_and_column(
+                    crop, (0, crop.shape[0], 0, crop.shape[1]), reader, column_share, games_won=games_won
+                )
             else:
                 capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
                 success, frame = capture.read()
                 if not success or frame is None:
                     continue
-                reading = read_score_and_column(frame, roi, reader, column_share)
+                reading = read_score_and_column(frame, roi, reader, column_share, games_won=games_won)
             reads += reading is not None
             if reading is not None:
                 tracker.observe(reading[0], frame_index, fps, reading[1])
