@@ -57,16 +57,30 @@ def test_score_tracker_uses_the_scoreboard_column_for_the_game():
     tracker = ScoreChangeTracker(confirmations_required=1, resync_confirmations=3)
     tracker.observe((20, 15), frame=0, fps=25.0, column=0)
     # The final point was missed, then game two's column appears.
-    for frame in (30, 60, 90):
+    for frame in range(30, 30 + 30 * 12, 30):
         tracker.observe((0, 0), frame=frame, fps=25.0, column=1)
     # Game one's final score, shown late in its own column, changes nothing.
-    for frame in (120, 150, 180, 210):
+    for frame in (400, 430, 460, 490):
         tracker.observe((21, 15), frame=frame, fps=25.0, column=0)
-    tracker.observe((1, 0), frame=240, fps=25.0, column=1)
-    tracker.observe((1, 0), frame=270, fps=25.0, column=1)
+    tracker.observe((1, 0), frame=520, fps=25.0, column=1)
+    tracker.observe((1, 0), frame=550, fps=25.0, column=1)
     assert tracker.game == 2
     assert tracker.current == (1, 0)
     assert tracker.events[-1]["game"] == 2
+
+
+def test_score_tracker_ignores_a_brief_extra_column():
+    # The 2025 graphic shows "Challenges Remaining" (2 / 1) as one more column for a few seconds.
+    tracker = ScoreChangeTracker(confirmations_required=1, resync_confirmations=3)
+    tracker.observe((6, 1), frame=0, fps=25.0, column=0)
+    tracker.observe((7, 1), frame=30, fps=25.0, column=0)
+    tracker.observe((7, 1), frame=45, fps=25.0, column=0)
+    for frame in range(60, 60 + 30 * 5, 30):
+        tracker.observe((2, 1), frame=frame, fps=25.0, column=1)
+    tracker.observe((8, 1), frame=300, fps=25.0, column=0)
+    tracker.observe((8, 1), frame=330, fps=25.0, column=0)
+    assert tracker.game == 1
+    assert tracker.current == (8, 1)
 
 
 def test_sparse_movement_is_explicit_lower_bound():
