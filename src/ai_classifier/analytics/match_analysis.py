@@ -210,16 +210,31 @@ def normalize_player_ends(
     return spans
 
 
+def end_change_index(ocr_event: dict[str, Any]) -> int:
+    """How many times the players have changed ends before this OCR point: after each game,
+    and in the third game once a player reaches 11."""
+    game = int(ocr_event.get("game", 1))
+    previous = ocr_event.get("previous_score") or [0, 0]
+    return game - 1 + (1 if game >= 3 and max(int(previous[0]), int(previous[1])) >= 11 else 0)
+
+
+def first_row_side_at(start_side: str, ocr_event: dict[str, Any]) -> str:
+    """The court side of the scoreboard's first row when ``ocr_event`` was scored."""
+    return start_side if end_change_index(ocr_event) % 2 == 0 else opponent_of(start_side)
+
+
 def infer_ocr_first_row_side(
     rallies: list[list[dict[str, Any]]],
     ocr_events: list[dict[str, Any]],
     fps: float,
 ) -> str:
-    """Decide which court side the scoreboard's first row belongs to.
+    """Decide which court side the scoreboard's first row belongs to in the first game.
 
     Broadcast scoreboards list players in a fixed order unrelated to the
     camera, so each OCR point change is compared with the next rally's server
-    (the rally winner serves next) and the majority vote wins.
+    (the rally winner serves next) and the majority vote wins. The players change
+    ends after every game, so each vote is turned back to the first game's ends
+    first; :func:`first_row_side_at` gives the side at a later point.
     """
     votes: Counter[str] = Counter()
     used: set[int] = set()
@@ -227,14 +242,16 @@ def infer_ocr_first_row_side(
         _, end_sec = _rally_bounds_seconds(rallies[i], fps)
         next_start_sec, _ = _rally_bounds_seconds(rallies[i + 1], fps)
         next_server = infer_rally_server(rallies[i + 1])
-        if next_server not in ("upper", "lower"):
+        # Across a game break the players have changed ends, so the server's side says nothing.
+        if next_server not in ("upper", "lower") or next_start_sec - end_sec >= GAME_BREAK_SECONDS:
             continue
         for ev_idx, ev in enumerate(ocr_events):
             ev_time = float(ev.get("time_seconds", 0.0))
             if ev_idx not in used and (end_sec - 3.0) <= ev_time <= (next_start_sec + 5.0):
                 used.add(ev_idx)
                 first_won = ev.get("point_winner") in ("first", "upper")
-                votes[next_server if first_won else opponent_of(next_server)] += 1
+                side = next_server if first_won else opponent_of(next_server)
+                votes[side if end_change_index(ev) % 2 == 0 else opponent_of(side)] += 1
                 break
     return "lower" if votes["lower"] > votes["upper"] else "upper"
 
@@ -269,13 +286,14 @@ def analyze_scoreboard(
         if ocr_events else "upper"
     )
 
-    def to_court_order(score: Any) -> Any:
-        """Reorder an OCR (first row, second row) score as (upper, lower)."""
-        if first_row_side == "lower" and isinstance(score, (list, tuple)) and len(score) == 2:
+    def to_court_order(score: Any, ocr_event: dict[str, Any] | None = None) -> Any:
+        """Reorder an OCR (first row, second row) score as (upper, lower) at ``ocr_event``'s ends."""
+        side = first_row_side_at(first_row_side, ocr_event) if ocr_event else first_row_side
+        if side == "lower" and isinstance(score, (list, tuple)) and len(score) == 2:
             return [score[1], score[0]]
         return score
 
-    initial_score = to_court_order(initial_score)
+    initial_score = to_court_order(initial_score, ocr_events[0] if ocr_events else None)
     # The first reading is the score before the first rally only when it was read by
     # then; a scoreboard first shown minutes later says nothing about the start.
     initial_time = (scoreboard_ocr or {}).get("initial_time_seconds") if isinstance(scoreboard_ocr, dict) else None
@@ -349,16 +367,17 @@ def analyze_scoreboard(
         if matched_ev:
             point_w = matched_ev.get("point_winner", "first")
             first_won = point_w in ("first", "upper")
-            winner = first_row_side if first_won else opponent_of(first_row_side)
+            row_side = first_row_side_at(first_row_side, matched_ev)
+            winner = row_side if first_won else opponent_of(row_side)
             reason = f"ocr_confirmed_{winner}"
-            score = to_court_order(matched_ev["score"])
+            score = to_court_order(matched_ev["score"], matched_ev)
             curr_score = [int(score[0]), int(score[1])]
             complete = True
             is_estimated = False
         elif i == 0 and ocr_events and initial_score and end_sec < float(ocr_events[0].get("time_seconds", 0.0)):
             # First rally in video ending before first detected score change
             prev_s = (
-                to_court_order(ocr_events[0]["previous_score"])
+                to_court_order(ocr_events[0]["previous_score"], ocr_events[0])
                 if "previous_score" in ocr_events[0]
                 else initial_score or [0, 0]
             )
@@ -381,6 +400,9 @@ def analyze_scoreboard(
                 next_server = None
                 if i + 1 < len(rally_keys):
                     next_server = infer_rally_server(rallies_dict[rally_keys[i + 1]])
+                    # The game's winner serves the next game first, from the other end.
+                    if next_server in ("upper", "lower") and game_of_rally[rally_keys[i + 1]] != game_of_rally[r_id]:
+                        next_server = opponent_of(next_server)
 
                 if next_server in ("upper", "lower"):
                     winner = next_server

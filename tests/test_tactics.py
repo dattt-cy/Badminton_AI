@@ -124,6 +124,36 @@ def test_scoreboard_maps_ocr_first_row_to_lower_player():
     assert result["rallies"][2]["score_text"] == "6 - 5"
 
 
+def test_scoreboard_first_row_follows_the_change_of_ends():
+    # The first-row player is on the lower half in game one and on the upper half in game two,
+    # and wins every rally (so serves the next one) in both.
+    predictions = []
+    rallies = [(1, "lower", 0), (2, "lower", 30), (3, "lower", 60), (4, "upper", 400), (5, "upper", 430), (6, "upper", 460)]
+    for rally, server, start in rallies:
+        receiver = "upper" if server == "lower" else "lower"
+        base = start * 30
+        predictions += [
+            {"refined_frame": base, "stroke": "serve", "hitter": server, "rally": rally},
+            {"refined_frame": base + 30, "stroke": "lift", "hitter": receiver, "rally": rally},
+            {"refined_frame": base + 60, "stroke": "smash", "hitter": server, "rally": rally},
+        ]
+    ocr = {
+        "initial_score": [20, 15],
+        "events": [
+            {"time_seconds": 3.0, "previous_score": [19, 15], "score": [20, 15], "point_winner": "first", "game": 1},
+            {"time_seconds": 33.0, "previous_score": [20, 15], "score": [21, 15], "point_winner": "first", "game": 1},
+            {"time_seconds": 403.0, "previous_score": [0, 0], "score": [1, 0], "point_winner": "first", "game": 2},
+            {"time_seconds": 433.0, "previous_score": [1, 0], "score": [2, 0], "point_winner": "first", "game": 2},
+        ],
+    }
+    result = analyze_scoreboard(predictions, scoreboard_ocr=ocr)
+    by_rally = {r["rally_id"]: r for r in result["rallies"]}
+    assert result["estimated_score"]["ocr_first_row_side"] == "lower"
+    assert by_rally[2]["winner"] == "lower" and by_rally[2]["score_text"] == "15 - 21"
+    assert by_rally[4]["winner"] == "upper" and by_rally[4]["score_text"] == "1 - 0"
+    assert by_rally[5]["winner"] == "upper" and by_rally[5]["score_text"] == "2 - 0"
+
+
 def test_build_tactical_analytics_full_pipeline():
     predictions = [
         {"refined_frame": 10, "stroke": "serve", "hitter": "lower", "rally": 1, "ball_round": 1, "confidence": 0.95},
@@ -177,7 +207,8 @@ def test_scoreboard_resets_score_after_game_break():
         ]
     scoreboard = analyze_scoreboard(predictions)
     assert [r["game_number"] for r in scoreboard["rallies"]] == [1, 1, 2]
-    assert [g["score_text"] for g in scoreboard["games"]] == ["0 - 2", "0 - 1"]
+    # Game two's first server (lower) won game one from the other end, the upper half.
+    assert [g["score_text"] for g in scoreboard["games"]] == ["1 - 1", "0 - 1"]
     assert scoreboard["estimated_score"]["text"] == "0 - 1"
     assert scoreboard["estimated_score"]["game_number"] == 2
 
