@@ -158,16 +158,21 @@ def _time_seconds(hit: dict[str, Any]) -> float | None:
 def _interval_ranges(
     hits: list[dict[str, Any]], intervals: list[tuple[int, int]]
 ) -> list[dict[str, Any]]:
-    """Describe index intervals over ``hits`` as ball rounds and video times."""
-    return [
-        {
-            "start_ball_round": int(hits[start].get("ball_round", start + 1)),
-            "end_ball_round": int(hits[end].get("ball_round", end + 1)),
+    """Describe index intervals over ``hits`` as ball rounds and video times.
+
+    Ball rounds are numbered before stroke refinement, which can swap two hits, so an
+    interval spans the lowest to the highest round of its hits rather than its ends'.
+    """
+    ranges = []
+    for start, end in intervals:
+        rounds = [int(hits[i].get("ball_round", i + 1)) for i in range(start, end + 1)]
+        ranges.append({
+            "start_ball_round": min(rounds),
+            "end_ball_round": max(rounds),
             "start_time_seconds": _time_seconds(hits[start]),
             "end_time_seconds": _time_seconds(hits[end]),
-        }
-        for start, end in intervals
-    ]
+        })
+    return ranges
 
 
 def _dominant_subtactic(subtactics: dict[str, list[tuple[int, int]]]) -> str | None:
