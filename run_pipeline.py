@@ -39,9 +39,10 @@ from ai_classifier.analytics import (  # noqa: E402
     assign_rallies,
     build_stroke_analytics,
     build_match_analysis,
-    calibrate_bwf_scoreboard_roi,
+    calibrate_bwf_scoreboard_rois,
     crop_score_roi,
     extract_score_events,
+    pick_scoreboard_layout,
     refine_strokes_by_physics,
     suppress_weak_duplicate_serves,
     TacticalSequenceDecoder,
@@ -445,21 +446,24 @@ def analyze_badminton_video(
 
     # The scoreboard ROI depends only on the frame size, so its OCR samples are cut
     # during this sequential scan instead of seeking the video once per sample later.
-    effective_score_roi = score_roi
-    if effective_score_roi is None and auto_ocr:
+    # Broadcasts use different scoreboard graphics, so every known layout is cropped and the
+    # one that reads is picked before the OCR pass.
+    score_rois: dict[str, tuple[int, int, int, int]] = {"manual": tuple(score_roi)} if score_roi is not None else {}
+    if not score_rois and auto_ocr:
         probe = cv2.VideoCapture(str(video_path))
         try:
             probe_h = int(probe.get(cv2.CAP_PROP_FRAME_HEIGHT))
             probe_w = int(probe.get(cv2.CAP_PROP_FRAME_WIDTH))
         finally:
             probe.release()
-        effective_score_roi = calibrate_bwf_scoreboard_roi(probe_h, probe_w)
+        score_rois = calibrate_bwf_scoreboard_rois(probe_h, probe_w)
     ocr_interval = max(1, score_ocr_interval)
-    score_crops: dict[int, Any] = {}
+    score_crops: dict[str, dict[int, Any]] = {name: {} for name in score_rois}
 
     def keep_score_crop(frame_index: int, frame) -> None:
         if frame_index % ocr_interval == 0:
-            score_crops[frame_index] = crop_score_roi(frame, effective_score_roi)
+            for name, roi in score_rois.items():
+                score_crops[name][frame_index] = crop_score_roi(frame, roi)
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -799,7 +803,7 @@ def analyze_badminton_video(
                 use_amp=use_amp and device.type == "cuda",
                 start_frame=start - half,
                 max_frames=(stop_at + half) if stop_at is not None else None,
-                frame_callback=keep_score_crop if effective_score_roi is not None else None,
+                frame_callback=keep_score_crop if score_rois else None,
                 on_scored=on_scored,
             )
             for run in list(runs):
@@ -826,7 +830,7 @@ def analyze_badminton_video(
             raw_events = scan_video(
                 video_path, hit_model, n_frames, stride=stride, batch_size=batch_size,
                 device=device, use_amp=use_amp and device.type == "cuda",
-                frame_callback=keep_score_crop if effective_score_roi is not None else None,
+                frame_callback=keep_score_crop if score_rois else None,
             )
             hit_model, _ = _load_hit_model("hit_extra", Path(extra_hit_checkpoint), device)
             extra = {(e.frame, e.side): e.score for e in scan_video(
@@ -866,14 +870,16 @@ def analyze_badminton_video(
 
     # 4.5 Scoreboard OCR Evidence Detection
     scoreboard_ocr = {"enabled": False, "reason": "score_roi_not_configured"}
-    if effective_score_roi is not None:
+    if score_rois:
         try:
-            print(f"[*] Scanning BWF broadcast scoreboard ROI {effective_score_roi} with EasyOCR...")
+            layout = pick_scoreboard_layout(score_crops) if len(score_rois) > 1 else next(iter(score_rois))
+            print(f"[*] Scanning BWF broadcast scoreboard ({layout}) ROI {score_rois[layout]} with EasyOCR...")
             scoreboard_ocr = extract_score_events(
                 video_path,
-                effective_score_roi,
+                score_rois[layout],
                 sample_interval_frames=score_ocr_interval,
-                roi_crops=score_crops,
+                roi_crops=score_crops[layout],
+                layout=layout,
             )
             print(
                 f"[+] Scoreboard OCR: {scoreboard_ocr.get('successful_reads', 0)} reads, "

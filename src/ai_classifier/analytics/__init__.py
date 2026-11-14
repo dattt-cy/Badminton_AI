@@ -16,7 +16,14 @@ from .match_analysis import (
 )
 from .tactics import analyze_coachai_plus_tactics
 from .movement import analyze_sparse_movement
-from .scoreboard import ScoreChangeTracker, calibrate_bwf_scoreboard_roi, crop_score_roi, extract_score_events
+from .scoreboard import (
+    ScoreChangeTracker,
+    calibrate_bwf_scoreboard_roi,
+    calibrate_bwf_scoreboard_rois,
+    crop_score_roi,
+    extract_score_events,
+    pick_scoreboard_layout,
+)
 
 __all__ = [
     "apply_next_hitter_landing",
@@ -37,6 +44,8 @@ __all__ = [
     "analyze_sparse_movement",
     "ScoreChangeTracker",
     "calibrate_bwf_scoreboard_roi",
+    "calibrate_bwf_scoreboard_rois",
+    "pick_scoreboard_layout",
     "crop_score_roi",
     "extract_score_events",
 ]
