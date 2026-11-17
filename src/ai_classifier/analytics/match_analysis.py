@@ -116,6 +116,12 @@ def _rally_groups(predictions: list[dict[str, Any]]) -> list[list[dict[str, Any]
     return [groups[k] for k in sorted(groups)]
 
 
+def _has_game_point(side: int, other: int) -> bool:
+    """One more rally would win the game: 21 with a two-point lead, or 30."""
+    won = side + 1
+    return won == 30 or (won >= 21 and won - other >= 2)
+
+
 def _game_of_each_rally(rallies: list[list[dict[str, Any]]], fps: float, game_break_seconds: float) -> list[int]:
     """Game number of each rally: a pause of ``game_break_seconds`` or more starts a new game.
 
@@ -412,6 +418,17 @@ def analyze_scoreboard(
                         reason = "next_rally_server"
                 else:
                     winner, reason = stroke_winner, stroke_reason
+
+                # The next rally starts a new game, so this one ended the game: when only one side had
+                # game point, that side won it, whatever the last stroke suggests (a net shot that
+                # touched the net reads as a winner for its hitter).
+                ends_game = i + 1 < len(rally_keys) and game_of_rally[rally_keys[i + 1]] != game_of_rally[r_id]
+                if ends_game:
+                    upper_gp = _has_game_point(curr_score[0], curr_score[1])
+                    lower_gp = _has_game_point(curr_score[1], curr_score[0])
+                    decided = "upper" if upper_gp and not lower_gp else ("lower" if lower_gp and not upper_gp else None)
+                    if decided and decided != winner:
+                        winner, reason = decided, "game_point_rule"
 
                 complete = not partial_start and not partial_end
                 if complete:

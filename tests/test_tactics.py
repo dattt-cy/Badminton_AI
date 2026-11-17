@@ -631,3 +631,40 @@ def test_scoreboard_starts_each_game_at_zero_with_ocr():
     scoreboard = analyze_scoreboard(predictions, scoreboard_ocr=ocr)
     assert [r["game_number"] for r in scoreboard["rallies"]] == [1, 1, 2]
     assert scoreboard["rallies"][2]["score_text"] == "0 - 1"
+
+
+def _game_ending_on_net_attack():
+    """Game 1 reaches 14-20 (upper-lower); its last rally ends on upper's net attack (a net touch the
+    video cannot show); then, after the break, game 2 starts with its server unseen."""
+    predictions, winners = [], ["lower"] * 20 + ["upper"] * 14
+    server = "lower"
+    for rally, winner in enumerate(winners, start=1):
+        base = rally * 900
+        predictions += [
+            {"refined_frame": base, "stroke": "serve", "hitter": server, "rally": rally, "confidence": 0.9},
+            {"refined_frame": base + 40, "stroke": "smash", "hitter": winner, "rally": rally, "confidence": 0.9},
+        ]
+        server = winner
+    last = len(winners) + 1
+    predictions += [
+        {"refined_frame": last * 900, "stroke": "serve", "hitter": "upper", "rally": last, "confidence": 0.9},
+        {"refined_frame": last * 900 + 40, "stroke": "net_attack", "hitter": "upper", "rally": last, "confidence": 0.9},
+    ]
+    start = last * 900 + 150 * 30
+    predictions += [
+        {"refined_frame": start, "stroke": "lift", "hitter": "unknown", "rally": last + 1, "confidence": 0.9},
+        {"refined_frame": start + 30, "stroke": "smash", "hitter": "upper", "rally": last + 1, "confidence": 0.9},
+        {"refined_frame": start + 60, "stroke": "lift", "hitter": "lower", "rally": last + 1, "confidence": 0.9},
+    ]
+    return predictions
+
+
+def test_scoreboard_gives_the_game_ending_rally_to_the_player_with_game_point():
+    # Match 308: at 14-20 the last stroke read as upper's winning net attack, but the game ended there,
+    # so lower, who had game point, won it 21-14.
+    scoreboard = analyze_scoreboard(_game_ending_on_net_attack())
+    game_end = scoreboard["rallies"][34]
+    assert game_end["game_number"] == 1
+    assert game_end["winner"] == "lower"
+    assert game_end["win_reason"] == "game_point_rule"
+    assert scoreboard["games"][0]["score_text"] == "14 - 21"
